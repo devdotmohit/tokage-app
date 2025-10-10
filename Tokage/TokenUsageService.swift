@@ -100,6 +100,13 @@ final class TokenUsageService {
         var totals: TokenTotals = .zero
         var hasTargetDayData: Bool = false
         var fileIdentifier: UInt64?
+        var previousTotals: TokenTotals?
+        var lastSignature: EventSignature?
+    }
+
+    private struct EventSignature: Equatable {
+        let timestamp: String
+        let totals: TokenTotals?
     }
 
     private let fileManager: FileManager
@@ -316,6 +323,7 @@ final class TokenUsageService {
 
         var totals = state.totals
         var hasUsage = state.hasTargetDayData
+        var previousTotals = state.previousTotals
 
         for line in lines {
             if line.isEmpty {
@@ -330,9 +338,39 @@ final class TokenUsageService {
 
             guard event.type == "event_msg" else { continue }
             guard event.payload?.type == "token_count" else { continue }
-            guard let payloadInfo = event.payload?.info else { continue }
-            guard let timestamp = event.timestamp,
-                  let eventDate = isoFormatter.date(from: timestamp) else {
+            let info = event.payload?.info
+            let currentTotals = info?.totalTokenUsage
+            let lastUsage = info?.lastTokenUsage
+            guard let timestamp = event.timestamp else { continue }
+            guard let eventDate = isoFormatter.date(from: timestamp) else { continue }
+
+            let signature = EventSignature(timestamp: timestamp, totals: currentTotals ?? lastUsage)
+            if let lastSignature = state.lastSignature, lastSignature == signature {
+                continue
+            }
+            state.lastSignature = signature
+
+            var deltaTotals: TokenTotals?
+
+            if let lastUsage = lastUsage {
+                deltaTotals = lastUsage
+            } else if let currentTotals = currentTotals {
+                if let previous = previousTotals {
+                    let rawDelta = currentTotals.delta(since: previous)
+                    deltaTotals = rawDelta
+                } else {
+                    previousTotals = currentTotals
+                    continue
+                }
+            } else {
+                continue
+            }
+
+            if let currentTotals = currentTotals {
+                previousTotals = currentTotals
+            }
+
+            guard let deltaTotals = deltaTotals, deltaTotals.isZero == false else {
                 continue
             }
 
@@ -340,16 +378,17 @@ final class TokenUsageService {
                 continue
             }
 
-            let usageTotals = payloadInfo.lastTokenUsage ?? payloadInfo.totalTokenUsage
-            guard let usage = usageTotals else { continue }
-
-            let freshInput = max(usage.inputTokens - usage.cachedInputTokens, 0)
+            let freshInput = max(deltaTotals.inputTokens - deltaTotals.cachedInputTokens, 0)
+            let billedTotal = freshInput
+                + deltaTotals.cachedInputTokens
+                + deltaTotals.outputTokens
+                + deltaTotals.reasoningOutputTokens
             let adjustedDelta = TokenTotals(
                 inputTokens: freshInput,
-                cachedInputTokens: usage.cachedInputTokens,
-                outputTokens: usage.outputTokens,
-                reasoningOutputTokens: usage.reasoningOutputTokens,
-                totalTokens: freshInput + usage.cachedInputTokens + usage.outputTokens + usage.reasoningOutputTokens
+                cachedInputTokens: deltaTotals.cachedInputTokens,
+                outputTokens: deltaTotals.outputTokens,
+                reasoningOutputTokens: deltaTotals.reasoningOutputTokens,
+                totalTokens: billedTotal
             )
 
             totals = totals.adding(adjustedDelta)
@@ -359,6 +398,7 @@ final class TokenUsageService {
 
         state.totals = totals
         state.hasTargetDayData = hasUsage
+        state.previousTotals = previousTotals
 
         return (state, changed)
     }

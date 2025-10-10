@@ -51,7 +51,7 @@ final class TokenUsageViewModel: ObservableObject {
     }
 
     private func startTimer() {
-        timerCancellable = Timer.publish(every: 60, on: .main, in: .common)
+        timerCancellable = Timer.publish(every: 300, on: .main, in: .common)
             .autoconnect()
             .sink { [weak self] _ in
                 self?.refresh()
