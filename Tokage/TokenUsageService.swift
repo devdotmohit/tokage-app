@@ -1,6 +1,6 @@
 import Foundation
 
-struct TokenTotals: Decodable, Equatable {
+struct TokenTotals: Decodable, Equatable, Hashable {
     let inputTokens: Int
     let cachedInputTokens: Int
     let outputTokens: Int
@@ -13,6 +13,44 @@ struct TokenTotals: Decodable, Equatable {
         case outputTokens = "output_tokens"
         case reasoningOutputTokens = "reasoning_output_tokens"
         case totalTokens = "total_tokens"
+    }
+
+    private enum LegacyCodingKeys: String, CodingKey {
+        case cacheReadInputTokens = "cache_read_input_tokens"
+    }
+
+    init(
+        inputTokens: Int,
+        cachedInputTokens: Int,
+        outputTokens: Int,
+        reasoningOutputTokens: Int,
+        totalTokens: Int
+    ) {
+        self.inputTokens = inputTokens
+        self.cachedInputTokens = cachedInputTokens
+        self.outputTokens = outputTokens
+        self.reasoningOutputTokens = reasoningOutputTokens
+        self.totalTokens = totalTokens
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let legacyContainer = try? decoder.container(keyedBy: LegacyCodingKeys.self)
+
+        let input = try container.decodeIfPresent(Int.self, forKey: .inputTokens) ?? 0
+        let cached = (try container.decodeIfPresent(Int.self, forKey: .cachedInputTokens))
+            ?? (legacyContainer.flatMap { try? $0.decodeIfPresent(Int.self, forKey: .cacheReadInputTokens) }) ?? 0
+        let output = try container.decodeIfPresent(Int.self, forKey: .outputTokens) ?? 0
+        let reasoning = try container.decodeIfPresent(Int.self, forKey: .reasoningOutputTokens) ?? 0
+        let total = try container.decodeIfPresent(Int.self, forKey: .totalTokens) ?? 0
+
+        self.init(
+            inputTokens: input,
+            cachedInputTokens: cached,
+            outputTokens: output,
+            reasoningOutputTokens: reasoning,
+            totalTokens: total
+        )
     }
 
     static let zero = TokenTotals(
@@ -50,12 +88,39 @@ struct TokenTotals: Decodable, Equatable {
     }
 
     var isZero: Bool {
-        totalTokens == 0
+        inputTokens == 0
+            && cachedInputTokens == 0
+            && outputTokens == 0
+            && reasoningOutputTokens == 0
+            && totalTokens == 0
+    }
+
+    var billedInputTokens: Int {
+        let normalizedInput = max(inputTokens, 0)
+        let clampedCached = max(min(cachedInputTokens, normalizedInput), 0)
+        return max(normalizedInput - clampedCached, 0)
+    }
+
+    func normalized() -> TokenTotals {
+        let normalizedInput = max(inputTokens, 0)
+        let clampedCached = max(min(cachedInputTokens, normalizedInput), 0)
+        let normalizedOutput = max(outputTokens, 0)
+        let normalizedReasoning = min(max(reasoningOutputTokens, 0), normalizedOutput)
+        let fallbackTotal = normalizedInput + normalizedOutput
+        let normalizedTotal = totalTokens > 0 ? totalTokens : fallbackTotal
+
+        return TokenTotals(
+            inputTokens: normalizedInput,
+            cachedInputTokens: clampedCached,
+            outputTokens: normalizedOutput,
+            reasoningOutputTokens: normalizedReasoning,
+            totalTokens: max(normalizedTotal, 0)
+        )
     }
 
     private static func delta(current: Int, previous: Int) -> Int {
         let delta = current - previous
-        return delta >= 0 ? delta : current
+        return delta >= 0 ? delta : 0
     }
 }
 
@@ -104,9 +169,14 @@ final class TokenUsageService {
         var lastSignature: EventSignature?
     }
 
-    private struct EventSignature: Equatable {
+    private struct EventSignature: Hashable {
         let timestamp: String
         let totals: TokenTotals?
+
+        func hash(into hasher: inout Hasher) {
+            hasher.combine(timestamp)
+            hasher.combine(totals)
+        }
     }
 
     private let fileManager: FileManager
@@ -147,7 +217,8 @@ final class TokenUsageService {
             resetCache(for: key)
         }
 
-        let logFiles = discoverLogFiles(for: key, rootURL: rootURL)
+        let fileDescriptors = discoverLogFiles(for: key, rootURL: rootURL)
+        let logFiles = fileDescriptors.map(\.url)
 
         if logFiles.isEmpty {
             cachedUsage = nil
@@ -161,9 +232,15 @@ final class TokenUsageService {
             preconditionFailure("Unable to derive target day for components \(key)")
         }
 
-        for url in logFiles {
+        for descriptor in fileDescriptors {
+            let url = descriptor.url
             let previousState = fileStates[url]
-            let (updatedState, changed) = processFile(at: url, previousState: previousState, targetDay: targetDay)
+            let (updatedState, changed) = processFile(
+                at: url,
+                previousState: previousState,
+                targetDay: targetDay,
+                enforceTimestamp: descriptor.enforceTimestamp
+            )
             fileStates[url] = updatedState
             if changed {
                 cacheDirty = true
@@ -195,30 +272,36 @@ final class TokenUsageService {
         cacheDirty = true
     }
 
-    private func discoverLogFiles(for key: CacheKey, rootURL: URL) -> [URL] {
-        var files: [URL] = []
+    private func discoverLogFiles(for key: CacheKey, rootURL: URL) -> [FileDescriptor] {
+        let dayComponent = String(format: "%02d", key.day)
+        var descriptors: [URL: Bool] = [:]
 
         if let dayDirectory = dayDirectory(for: key, rootURL: rootURL) {
-            files = jsonlFiles(at: dayDirectory)
-            if files.isEmpty == false {
-                return files.sorted { $0.path < $1.path }
+            let files = jsonlFiles(at: dayDirectory)
+            for file in files {
+                descriptors[file] = false
             }
         }
 
         if let monthDirectory = monthDirectory(for: key, rootURL: rootURL) {
-            files = jsonlFiles(at: monthDirectory)
-            if files.isEmpty == false {
-                return files.sorted { $0.path < $1.path }
+            let monthFiles = jsonlFiles(at: monthDirectory)
+            for file in monthFiles where descriptors[file] == nil {
+                let components = file.pathComponents
+                let enforce = components.contains(dayComponent) == false
+                descriptors[file] = enforce
             }
         }
 
-        if let enumerator = fileManager.enumerator(at: rootURL, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles]) {
-            for case let fileURL as URL in enumerator where fileURL.pathExtension == "jsonl" {
-                files.append(fileURL)
+        if descriptors.isEmpty {
+            let fallbackFiles = jsonlFiles(at: rootURL)
+            for file in fallbackFiles {
+                descriptors[file] = true
             }
         }
 
-        return files.sorted { $0.path < $1.path }
+        return descriptors
+            .map { FileDescriptor(url: $0.key, enforceTimestamp: $0.value) }
+            .sorted { $0.url.path < $1.url.path }
     }
 
     private func dayDirectory(for key: CacheKey, rootURL: URL) -> URL? {
@@ -260,7 +343,7 @@ final class TokenUsageService {
         calendar.date(from: DateComponents(year: key.year, month: key.month, day: key.day))
     }
 
-    private func processFile(at url: URL, previousState: FileState?, targetDay: Date) -> (FileState, Bool) {
+    private func processFile(at url: URL, previousState: FileState?, targetDay: Date, enforceTimestamp: Bool) -> (FileState, Bool) {
         var state = previousState ?? FileState()
         var changed = false
 
@@ -370,28 +453,20 @@ final class TokenUsageService {
                 previousTotals = currentTotals
             }
 
-            guard let deltaTotals = deltaTotals, deltaTotals.isZero == false else {
+            guard let deltaTotals = deltaTotals else {
                 continue
             }
 
-            guard calendar.isDate(eventDate, inSameDayAs: targetDay) else {
+            if enforceTimestamp, calendar.isDate(eventDate, inSameDayAs: targetDay) == false {
                 continue
             }
 
-            let freshInput = max(deltaTotals.inputTokens - deltaTotals.cachedInputTokens, 0)
-            let billedTotal = freshInput
-                + deltaTotals.cachedInputTokens
-                + deltaTotals.outputTokens
-                + deltaTotals.reasoningOutputTokens
-            let adjustedDelta = TokenTotals(
-                inputTokens: freshInput,
-                cachedInputTokens: deltaTotals.cachedInputTokens,
-                outputTokens: deltaTotals.outputTokens,
-                reasoningOutputTokens: deltaTotals.reasoningOutputTokens,
-                totalTokens: billedTotal
-            )
+            let normalizedDelta = deltaTotals.normalized()
+            guard normalizedDelta.isZero == false else {
+                continue
+            }
 
-            totals = totals.adding(adjustedDelta)
+            totals = totals.adding(normalizedDelta)
             hasUsage = true
             changed = true
         }
@@ -426,6 +501,97 @@ final class TokenUsageService {
 
         return [usage]
     }
+
+    func fetchMonthlyTotals(for date: Date = Date()) throws -> TokenTotals {
+        let key = makeCacheKey(for: date)
+
+        let rootURL = fileManager.homeDirectoryForCurrentUser
+            .appendingPathComponent(".codex", isDirectory: true)
+            .appendingPathComponent("sessions", isDirectory: true)
+
+        guard fileManager.fileExists(atPath: rootURL.path) else {
+            throw TokenUsageError.missingSessionsDirectory
+        }
+
+        guard let monthDirectory = monthDirectory(for: key, rootURL: rootURL) else {
+            throw TokenUsageError.missingMonthDirectory
+        }
+
+        guard let enumerator = fileManager.enumerator(at: monthDirectory, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles]) else {
+            throw TokenUsageError.missingMonthDirectory
+        }
+
+        var monthTotals: TokenTotals = .zero
+        var processedSignatures: Set<EventSignature> = []
+
+        for case let fileURL as URL in enumerator where fileURL.pathExtension == "jsonl" {
+            var previousTotals: TokenTotals?
+
+            guard let data = try? Data(contentsOf: fileURL),
+                  let content = String(data: data, encoding: .utf8) else {
+                continue
+            }
+
+            for line in content.split(separator: "\n") {
+                if line.isEmpty {
+                    continue
+                }
+
+                guard
+                    let lineData = line.data(using: .utf8),
+                    let event = try? decoder.decode(TokenLogLine.self, from: lineData)
+                else {
+                    continue
+                }
+
+                guard event.type == "event_msg", event.payload?.type == "token_count" else {
+                    continue
+                }
+
+                guard let timestamp = event.timestamp,
+                      let eventDate = isoFormatter.date(from: timestamp),
+                      calendar.isDate(eventDate, equalTo: date, toGranularity: .month) else {
+                    continue
+                }
+
+                let info = event.payload?.info
+                let currentTotals = info?.totalTokenUsage
+                let lastUsage = info?.lastTokenUsage
+
+                let signature = EventSignature(timestamp: timestamp, totals: currentTotals ?? lastUsage)
+                if processedSignatures.contains(signature) {
+                    continue
+                }
+                processedSignatures.insert(signature)
+
+                var delta: TokenTotals?
+
+                if let lastUsage = lastUsage {
+                    delta = lastUsage
+                } else if let currentTotals = currentTotals {
+                    if let previous = previousTotals {
+                        delta = currentTotals.delta(since: previous)
+                        previousTotals = currentTotals
+                    } else {
+                        previousTotals = currentTotals
+                        continue
+                    }
+                }
+
+                if let currentTotals = currentTotals {
+                    previousTotals = currentTotals
+                }
+
+                guard let normalizedDelta = delta?.normalized(), normalizedDelta.isZero == false else {
+                    continue
+                }
+
+                monthTotals = monthTotals.adding(normalizedDelta)
+            }
+        }
+
+        return monthTotals
+    }
 }
 
 private struct TokenLogLine: Decodable {
@@ -453,3 +619,7 @@ private struct TokenLogLine: Decodable {
         }
     }
 }
+    private struct FileDescriptor {
+        let url: URL
+        let enforceTimestamp: Bool
+    }

@@ -45,12 +45,13 @@ struct TokenUsageFormatter {
     }
 
     func breakdown(for totals: TokenTotals) -> [TokenBreakdown] {
-        [
+        let billedInput = totals.billedInputTokens
+        return [
             TokenBreakdown(
                 kind: .input,
                 label: "Input",
-                tokensText: formatTokens(totals.inputTokens),
-                costText: formatCurrency(for: cost(tokens: totals.inputTokens, rate: Pricing.input))
+                tokensText: formatTokens(billedInput),
+                costText: formatCurrency(for: cost(tokens: billedInput, rate: Pricing.input))
             ),
             TokenBreakdown(
                 kind: .cached,
@@ -75,6 +76,8 @@ struct TokenUsageFormatter {
 
     private func formatTokens(_ value: Int) -> String {
         switch abs(value) {
+        case 1_000_000_000...:
+            return formatCompact(Double(value) / 1_000_000_000, suffix: "B")
         case 1_000_000...:
             return formatCompact(Double(value) / 1_000_000, suffix: "M")
         case 1_000...:
@@ -85,7 +88,8 @@ struct TokenUsageFormatter {
     }
 
     private func formatCost(for totals: TokenTotals) -> String {
-        let cost = cost(tokens: totals.inputTokens, rate: Pricing.input) +
+        let billedInput = totals.billedInputTokens
+        let cost = cost(tokens: billedInput, rate: Pricing.input) +
             cost(tokens: totals.cachedInputTokens, rate: Pricing.cache) +
             cost(tokens: totals.outputTokens, rate: Pricing.output) +
             cost(tokens: totals.reasoningOutputTokens, rate: Pricing.reasoning)
@@ -102,8 +106,14 @@ struct TokenUsageFormatter {
     }
 
     private func formatCompact(_ value: Double, suffix: String) -> String {
-        let formatted = String(format: "%.1f", value)
-        let trimmed = formatted.hasSuffix(".0") ? String(formatted.dropLast(2)) : formatted
+        let formatted = String(format: "%.2f", value)
+        let trimmed: String
+        if formatted.contains(".") {
+            let trimmedZeros = formatted.replacingOccurrences(of: "0+$", with: "", options: .regularExpression)
+            trimmed = trimmedZeros.hasSuffix(".") ? String(trimmedZeros.dropLast()) : trimmedZeros
+        } else {
+            trimmed = formatted
+        }
         return trimmed + suffix
     }
 }

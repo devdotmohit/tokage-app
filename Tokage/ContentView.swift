@@ -65,15 +65,10 @@ struct ContentView: View {
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 12) {
                     ForEach(viewModel.dailyUsages) { usage in
-                        Text(formatter.header(for: usage))
-                            .font(.headline)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .padding()
-                            .background(
-                                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                                    .fill(Color(nsColor: NSColor.windowBackgroundColor))
-                                    .shadow(color: Color.black.opacity(0.05), radius: 4, x: 0, y: 2)
-                            )
+                        summaryCard(for: usage)
+                    }
+                    if viewModel.historicalSummaries.isEmpty == false {
+                        historicalSummariesCard
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -82,6 +77,53 @@ struct ContentView: View {
     }
 }
 
+#if DEBUG
 #Preview {
     ContentView(viewModel: TokenUsageViewModel())
+}
+#endif
+
+extension ContentView {
+    private var historicalSummariesCard: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            ForEach(viewModel.historicalSummaries) { summary in
+                summaryCard(for: DailyTokenUsage(
+                    dayIdentifier: summary.id,
+                    date: summary.date,
+                    displayDate: summary.label,
+                    totals: summary.totals
+                ))
+            }
+            if let monthSummary = viewModel.monthSummary {
+                if viewModel.historicalSummaries.isEmpty == false {
+                    Divider()
+                }
+                summaryCard(for: DailyTokenUsage(
+                    dayIdentifier: monthSummary.id,
+                    date: monthSummary.date,
+                    displayDate: monthSummary.label,
+                    totals: monthSummary.totals
+                ))
+            }
+        }
+        .padding()
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .fill(Color(nsColor: NSColor.windowBackgroundColor))
+                .shadow(color: Color.black.opacity(0.05), radius: 4, x: 0, y: 2)
+        )
+    }
+
+    private func summaryCard(for usage: DailyTokenUsage) -> some View {
+        Text(formatter.header(for: usage))
+            .font(.headline)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding()
+            .background(
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .fill(Color(nsColor: NSColor.windowBackgroundColor))
+                    .shadow(color: Color.black.opacity(0.05), radius: 4, x: 0, y: 2)
+            )
+    }
 }
