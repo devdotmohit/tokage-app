@@ -37,11 +37,11 @@ struct TokenUsageFormatter {
 
     func header(for usage: DailyTokenUsage) -> String {
         let totals = usage.totals
-        return "\(usage.displayDate) — \(formatTokens(totals.totalTokens)) • \(formatCost(for: totals))"
+        return "\(usage.displayDate) — \(formatTokens(totals.billingTokenTotal)) • \(formatCost(for: totals))"
     }
 
     func summary(totals: TokenTotals) -> String {
-        "\(formatTokens(totals.totalTokens)) • \(formatCost(for: totals))"
+        "\(formatTokens(totals.billingTokenTotal)) • \(formatCost(for: totals))"
     }
 
     func breakdown(for totals: TokenTotals) -> [TokenBreakdown] {

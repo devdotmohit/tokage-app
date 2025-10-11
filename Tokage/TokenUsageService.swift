@@ -101,6 +101,11 @@ struct TokenTotals: Decodable, Equatable, Hashable {
         return max(normalizedInput - clampedCached, 0)
     }
 
+    var billingTokenTotal: Int {
+        // Reasoning tokens are billed on top of output tokens, so we include them separately here.
+        billedInputTokens + cachedInputTokens + outputTokens + reasoningOutputTokens
+    }
+
     func normalized() -> TokenTotals {
         let normalizedInput = max(inputTokens, 0)
         let clampedCached = max(min(cachedInputTokens, normalizedInput), 0)
@@ -286,8 +291,9 @@ final class TokenUsageService {
         if let monthDirectory = monthDirectory(for: key, rootURL: rootURL) {
             let monthFiles = jsonlFiles(at: monthDirectory)
             for file in monthFiles where descriptors[file] == nil {
-                let components = file.pathComponents
-                let enforce = components.contains(dayComponent) == false
+                let relativeComponents = file.pathComponents.dropFirst(monthDirectory.pathComponents.count)
+                let firstRelativeComponent = relativeComponents.first
+                let enforce = firstRelativeComponent != dayComponent
                 descriptors[file] = enforce
             }
         }
