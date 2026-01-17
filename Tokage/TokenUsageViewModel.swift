@@ -30,6 +30,12 @@ final class TokenUsageViewModel: ObservableObject {
     private var monthCache: [String: TokenTotals] = [:]
     private var lastTodayTotalsByMonth: [String: TokenTotals] = [:]
     private var lastDayKeyByMonth: [String: String] = [:]
+    private let hasSeenUsageDataKey = "TokageHasSeenUsageData"
+
+    private var hasSeenUsageData: Bool {
+        get { UserDefaults.standard.bool(forKey: hasSeenUsageDataKey) }
+        set { UserDefaults.standard.set(newValue, forKey: hasSeenUsageDataKey) }
+    }
 
     init(service: TokenUsageService = TokenUsageService()) {
         self.service = service
@@ -48,52 +54,90 @@ final class TokenUsageViewModel: ObservableObject {
 
         let service = self.service
         Task(priority: .background) { [weak self] in
+            guard let self = self else { return }
+            let referenceDate = Date()
+            var usage: [DailyTokenUsage] = []
+            var newTodayTotals: TokenTotals?
+            var terminalError: Error?
+
             do {
-                guard let self = self else { return }
-                let referenceDate = Date()
-                let usage = try service.fetchDailyUsage(for: referenceDate)
-                let plan = await MainActor.run {
-                    self.makeComputationPlan(referenceDate: referenceDate)
-                }
-
-                let fetchResult = TokenUsageViewModel.performBackgroundFetch(
-                    plan: plan,
-                    referenceDate: referenceDate,
-                    service: service
-                )
-
-                await MainActor.run { [weak self] in
-                    guard let self = self else { return }
-
-                    for (key, totals) in fetchResult.historical {
-                        self.historicalCache[key] = totals
-                    }
-
-                    let historical = self.buildHistoricalSummaries(plan: plan)
-                    let newTodayTotals = usage.first?.totals
-                    let monthSummary = self.updateMonthSummary(
-                        referenceDate: referenceDate,
-                        todayTotals: newTodayTotals,
-                        prefetchedTotals: fetchResult.monthTotals
-                    )
-
-                    self.dailyUsages = usage
-                    self.todayTotals = newTodayTotals
-                    self.lastUpdated = Date()
-                    self.isLoading = false
-                    self.historicalSummaries = historical
-                    self.monthSummary = monthSummary
+                usage = try service.fetchDailyUsage(for: referenceDate)
+                newTodayTotals = usage.first?.totals
+            } catch let tokenError as TokenUsageError {
+                switch tokenError {
+                case .missingMonthDirectory:
+                    newTodayTotals = .zero
+                case .missingSessionsDirectory:
+                    terminalError = tokenError
                 }
             } catch {
+                terminalError = error
+            }
+
+            if let terminalError {
                 await MainActor.run { [weak self] in
                     guard let self = self else { return }
+                    if let tokenError = terminalError as? TokenUsageError,
+                       case .missingSessionsDirectory = tokenError {
+                        self.dailyUsages = []
+                        self.todayTotals = .zero
+                        self.isLoading = false
+                        self.errorMessage = nil
+                        self.lastUpdated = Date()
+                        if self.hasSeenUsageData == false {
+                            self.historicalSummaries = []
+                            self.monthSummary = nil
+                        }
+                        return
+                    }
+
                     self.dailyUsages = []
                     self.todayTotals = nil
                     self.isLoading = false
-                    self.errorMessage = error.localizedDescription
+                    self.errorMessage = terminalError.localizedDescription
                     self.historicalSummaries = []
                     self.monthSummary = nil
                 }
+                return
+            }
+
+            let plan = await MainActor.run {
+                self.makeComputationPlan(referenceDate: referenceDate)
+            }
+
+            let fetchResult = TokenUsageViewModel.performBackgroundFetch(
+                plan: plan,
+                referenceDate: referenceDate,
+                service: service
+            )
+
+            await MainActor.run { [weak self] in
+                guard let self = self else { return }
+
+                for (key, totals) in fetchResult.historical {
+                    self.historicalCache[key] = totals
+                }
+
+                let historical = self.buildHistoricalSummaries(plan: plan)
+                let monthSummary = self.updateMonthSummary(
+                    referenceDate: referenceDate,
+                    todayTotals: newTodayTotals,
+                    prefetchedTotals: fetchResult.monthTotals
+                )
+
+                let sawData = (newTodayTotals?.isZero == false)
+                    || (fetchResult.historical.isEmpty == false)
+                    || (fetchResult.monthTotals != nil)
+                if sawData {
+                    self.hasSeenUsageData = true
+                }
+
+                self.dailyUsages = usage
+                self.todayTotals = newTodayTotals
+                self.lastUpdated = Date()
+                self.isLoading = false
+                self.historicalSummaries = historical
+                self.monthSummary = monthSummary
             }
         }
     }
