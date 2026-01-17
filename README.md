@@ -29,3 +29,23 @@ Tokage is a lightweight macOS menu‑bar utility that tallies your Codex JSONL s
 
 The logic mirrors ccusage’s token normalization (`cache_read_input_tokens` fallback, reasoning included in output, etc.).  
 If you need cross-verification, run ccusage against the same log tree—the totals should align within rounding.
+
+## Release (Sparkle + DMG)
+
+1. Set versions in Xcode: `MARKETING_VERSION` (e.g., `1.0`) and `CURRENT_PROJECT_VERSION` (build number).  
+2. Ensure Sparkle keys are set in build settings (`SUFeedURL`, `SUPublicEDKey`).  
+3. Archive and export with **Developer ID** signing (Xcode → Product → Archive → Distribute App → Developer ID).  
+4. Create a DMG:
+   ```bash
+   scripts/create-dmg.sh /path/to/Exported/Tokage.app
+   ```
+5. Notarize and staple the DMG:
+   ```bash
+   xcrun notarytool submit dist/Tokage.dmg --keychain-profile "AC_PROFILE" --wait
+   xcrun stapler staple dist/Tokage.dmg
+   ```
+6. Sign the DMG for Sparkle (from the Sparkle release bundle):
+   ```bash
+   /path/to/Sparkle/bin/sign_update --ed-key-file /path/to/private_key.pem dist/Tokage.dmg
+   ```
+7. Update `appcast.xml` with `sparkle:version`, `sparkle:shortVersionString`, `sparkle:edSignature`, and `length`, then upload the DMG + appcast to `SUFeedURL`.

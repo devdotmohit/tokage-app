@@ -7,16 +7,19 @@
 
 import SwiftUI
 import AppKit
+import Sparkle
+import Combine
 
 @main
 @available(macOS 13.0, *)
 struct TokageApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @StateObject private var viewModel = TokenUsageViewModel()
+    @StateObject private var updaterStore = UpdaterStore()
 
     var body: some Scene {
         MenuBarExtra(isInserted: .constant(true)) {
-            MenuContent(viewModel: viewModel)
+            MenuContent(viewModel: viewModel, updaterController: updaterStore.updaterController)
         } label: {
             Label {
                 Text(viewModel.menuBarSummaryText)
@@ -30,6 +33,7 @@ struct TokageApp: App {
 
 private struct MenuContent: View {
     @ObservedObject var viewModel: TokenUsageViewModel
+    let updaterController: SPUStandardUpdaterController
     private let formatter = TokenUsageFormatter.shared
 
     var body: some View {
@@ -62,6 +66,8 @@ private struct MenuContent: View {
             Divider()
         }
 
+        CheckForUpdatesView(updaterController: updaterController)
+
         Button("Refresh Now") {
             viewModel.refresh()
         }
@@ -71,6 +77,21 @@ private struct MenuContent: View {
             NSApp.terminate(nil)
         }
         .keyboardShortcut("q")
+    }
+}
+
+@MainActor
+private struct CheckForUpdatesView: View {
+    let updaterController: SPUStandardUpdaterController
+
+    var body: some View {
+        Button("Check for Updates...") {
+            NSApp.activate(ignoringOtherApps: true)
+            DispatchQueue.main.async {
+                updaterController.checkForUpdates(nil)
+            }
+        }
+        .disabled(!updaterController.updater.canCheckForUpdates)
     }
 }
 
@@ -99,5 +120,29 @@ private struct TokenBreakdownMenu: View {
 private final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
+    }
+}
+
+@MainActor
+private final class UpdaterStore: ObservableObject {
+    let updaterController: SPUStandardUpdaterController
+    let objectWillChange = ObservableObjectPublisher()
+    private let updaterDelegate = UpdaterDelegate()
+
+    init() {
+        updaterController = SPUStandardUpdaterController(
+            startingUpdater: true,
+            updaterDelegate: updaterDelegate,
+            userDriverDelegate: nil
+        )
+    }
+}
+
+private final class UpdaterDelegate: NSObject, SPUUpdaterDelegate {
+    func feedURLString(for updater: SPUUpdater) -> String? {
+        if let feedURL = Bundle.main.object(forInfoDictionaryKey: "SUFeedURL") as? String {
+            return feedURL
+        }
+        return "https://tokage.app/appcast.xml"
     }
 }
