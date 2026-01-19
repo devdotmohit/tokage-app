@@ -9,6 +9,7 @@ import SwiftUI
 import AppKit
 import Sparkle
 import Combine
+import ServiceManagement
 
 @main
 @available(macOS 13.0, *)
@@ -16,10 +17,15 @@ struct TokageApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @StateObject private var viewModel = TokenUsageViewModel()
     @StateObject private var updaterStore = UpdaterStore()
+    @StateObject private var loginItemController = LoginItemController()
 
     var body: some Scene {
         MenuBarExtra(isInserted: .constant(true)) {
-            MenuContent(viewModel: viewModel, updaterController: updaterStore.updaterController)
+            MenuContent(
+                viewModel: viewModel,
+                updaterController: updaterStore.updaterController,
+                loginItemController: loginItemController
+            )
         } label: {
             Label {
                 Text(viewModel.menuBarSummaryText)
@@ -34,6 +40,7 @@ struct TokageApp: App {
 private struct MenuContent: View {
     @ObservedObject var viewModel: TokenUsageViewModel
     let updaterController: SPUStandardUpdaterController
+    @ObservedObject var loginItemController: LoginItemController
     private let formatter = TokenUsageFormatter.shared
 
     var body: some View {
@@ -67,6 +74,11 @@ private struct MenuContent: View {
         }
 
         CheckForUpdatesView(updaterController: updaterController)
+
+        Toggle("Launch at Login", isOn: Binding(
+            get: { loginItemController.isEnabled },
+            set: { loginItemController.setEnabled($0) }
+        ))
 
         Button("Refresh Now") {
             viewModel.refresh()
@@ -120,6 +132,28 @@ private struct TokenBreakdownMenu: View {
 private final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
+    }
+}
+
+@MainActor
+final class LoginItemController: ObservableObject {
+    @Published private(set) var isEnabled: Bool
+
+    init() {
+        isEnabled = SMAppService.mainApp.status == .enabled
+    }
+
+    func setEnabled(_ enabled: Bool) {
+        do {
+            if enabled {
+                try SMAppService.mainApp.register()
+            } else {
+                try SMAppService.mainApp.unregister()
+            }
+        } catch {
+            NSLog("Failed to update login item: %@", error.localizedDescription)
+        }
+        isEnabled = SMAppService.mainApp.status == .enabled
     }
 }
 
