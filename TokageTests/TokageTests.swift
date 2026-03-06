@@ -157,17 +157,22 @@ struct TokageTests {
         #expect(usage[0].totals == inDay.tokenTotals)
     }
 
-    @Test func dailyTotalsSkipInheritedReplayInForkedLogs() throws {
-        let inherited = FixtureTotals(inputTokens: 100, cachedInputTokens: 20, outputTokens: 10, reasoningOutputTokens: 5, totalTokens: 110)
+    @Test func dailyTotalsIgnoreForkedSubagentLogs() throws {
+        let parentUsage = FixtureTotals(inputTokens: 100, cachedInputTokens: 20, outputTokens: 10, reasoningOutputTokens: 5, totalTokens: 110)
         let childDelta = FixtureTotals(inputTokens: 60, cachedInputTokens: 10, outputTokens: 8, reasoningOutputTokens: 2, totalTokens: 68)
         let childCumulative = FixtureTotals(inputTokens: 160, cachedInputTokens: 30, outputTokens: 18, reasoningOutputTokens: 7, totalTokens: 178)
 
         let fileContents = try [
+            "2026/02/22/session-parent.jsonl": buildLog(events: [
+                makeSessionMetaEvent(timestamp: "2026-02-22T07:00:00.000Z", sessionID: "parent", forkedFromSessionID: nil),
+                makeTurnContextEvent(timestamp: "2026-02-22T07:00:00.001Z", model: "gpt-5.4", turnID: "parent-turn"),
+                makeTokenCountEvent(timestamp: "2026-02-22T07:00:00.002Z", total: parentUsage, last: parentUsage)
+            ]),
             "2026/02/22/session-child.jsonl": buildLog(events: [
                 makeSessionMetaEvent(timestamp: "2026-02-22T07:00:00.000Z", sessionID: "child", forkedFromSessionID: "parent"),
                 makeSessionMetaEvent(timestamp: "2026-02-22T07:00:00.001Z", sessionID: "parent", forkedFromSessionID: nil),
                 makeTurnContextEvent(timestamp: "2026-02-22T07:00:00.002Z", model: "gpt-5.4", turnID: "parent-turn"),
-                makeTokenCountEvent(timestamp: "2026-02-22T07:00:00.003Z", total: inherited, last: inherited),
+                makeTokenCountEvent(timestamp: "2026-02-22T07:00:00.003Z", total: parentUsage, last: parentUsage),
                 makeTurnContextEvent(timestamp: "2026-02-22T07:00:01.000Z", model: "gpt-5.4", turnID: "child-turn"),
                 makeTokenCountEvent(timestamp: "2026-02-22T07:00:01.001Z", total: childCumulative, last: childDelta)
             ])
@@ -179,7 +184,7 @@ struct TokageTests {
         let usage = try service.fetchDailyUsage(for: date(year: 2026, month: 2, day: 22))
 
         #expect(usage.count == 1)
-        #expect(usage[0].totals == childDelta.tokenTotals)
+        #expect(usage[0].totals == parentUsage.tokenTotals)
     }
 
     @Test func costsFollowCurrentModelAndAlias() throws {
@@ -249,7 +254,7 @@ struct TokageTests {
         #expect(isApproximatelyEqual(aggregate.costs.totalCost, 7.15))
     }
 
-    @Test func monthlyTotalsSkipInheritedReplayAcrossForkedChildLogs() throws {
+    @Test func monthlyTotalsIgnoreForkedSubagentLogs() throws {
         let parentUsage = FixtureTotals(inputTokens: 100, cachedInputTokens: 20, outputTokens: 10, reasoningOutputTokens: 5, totalTokens: 110)
         let childDelta = FixtureTotals(inputTokens: 60, cachedInputTokens: 10, outputTokens: 8, reasoningOutputTokens: 2, totalTokens: 68)
         let childCumulative = FixtureTotals(inputTokens: 160, cachedInputTokens: 30, outputTokens: 18, reasoningOutputTokens: 7, totalTokens: 178)
@@ -275,7 +280,7 @@ struct TokageTests {
 
         let aggregate = try service.fetchMonthlyTotals(for: date(year: 2026, month: 2, day: 22))
 
-        #expect(aggregate.totals == parentUsage.tokenTotals.adding(childDelta.tokenTotals))
+        #expect(aggregate.totals == parentUsage.tokenTotals)
     }
 
     private func makeService(logsByPath: [String: String]) throws -> (TokenUsageService, URL) {
