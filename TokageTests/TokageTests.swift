@@ -157,6 +157,31 @@ struct TokageTests {
         #expect(usage[0].totals == inDay.tokenTotals)
     }
 
+    @Test func dailyTotalsSkipInheritedReplayInForkedLogs() throws {
+        let inherited = FixtureTotals(inputTokens: 100, cachedInputTokens: 20, outputTokens: 10, reasoningOutputTokens: 5, totalTokens: 110)
+        let childDelta = FixtureTotals(inputTokens: 60, cachedInputTokens: 10, outputTokens: 8, reasoningOutputTokens: 2, totalTokens: 68)
+        let childCumulative = FixtureTotals(inputTokens: 160, cachedInputTokens: 30, outputTokens: 18, reasoningOutputTokens: 7, totalTokens: 178)
+
+        let fileContents = try [
+            "2026/02/22/session-child.jsonl": buildLog(events: [
+                makeSessionMetaEvent(timestamp: "2026-02-22T07:00:00.000Z", sessionID: "child", forkedFromSessionID: "parent"),
+                makeSessionMetaEvent(timestamp: "2026-02-22T07:00:00.001Z", sessionID: "parent", forkedFromSessionID: nil),
+                makeTurnContextEvent(timestamp: "2026-02-22T07:00:00.002Z", model: "gpt-5.4", turnID: "parent-turn"),
+                makeTokenCountEvent(timestamp: "2026-02-22T07:00:00.003Z", total: inherited, last: inherited),
+                makeTurnContextEvent(timestamp: "2026-02-22T07:00:01.000Z", model: "gpt-5.4", turnID: "child-turn"),
+                makeTokenCountEvent(timestamp: "2026-02-22T07:00:01.001Z", total: childCumulative, last: childDelta)
+            ])
+        ]
+
+        let (service, rootURL) = try makeService(logsByPath: fileContents)
+        defer { try? FileManager.default.removeItem(at: rootURL) }
+
+        let usage = try service.fetchDailyUsage(for: date(year: 2026, month: 2, day: 22))
+
+        #expect(usage.count == 1)
+        #expect(usage[0].totals == childDelta.tokenTotals)
+    }
+
     @Test func costsFollowCurrentModelAndAlias() throws {
         let first = FixtureTotals(inputTokens: 1_000_000, cachedInputTokens: 500_000, outputTokens: 100_000, reasoningOutputTokens: 50_000, totalTokens: 1_100_000)
         let second = FixtureTotals(inputTokens: 1_000_000, cachedInputTokens: 0, outputTokens: 100_000, reasoningOutputTokens: 20_000, totalTokens: 1_100_000)
@@ -224,6 +249,35 @@ struct TokageTests {
         #expect(isApproximatelyEqual(aggregate.costs.totalCost, 7.15))
     }
 
+    @Test func monthlyTotalsSkipInheritedReplayAcrossForkedChildLogs() throws {
+        let parentUsage = FixtureTotals(inputTokens: 100, cachedInputTokens: 20, outputTokens: 10, reasoningOutputTokens: 5, totalTokens: 110)
+        let childDelta = FixtureTotals(inputTokens: 60, cachedInputTokens: 10, outputTokens: 8, reasoningOutputTokens: 2, totalTokens: 68)
+        let childCumulative = FixtureTotals(inputTokens: 160, cachedInputTokens: 30, outputTokens: 18, reasoningOutputTokens: 7, totalTokens: 178)
+
+        let fileContents = try [
+            "2026/02/22/session-parent.jsonl": buildLog(events: [
+                makeSessionMetaEvent(timestamp: "2026-02-22T07:00:00.000Z", sessionID: "parent", forkedFromSessionID: nil),
+                makeTurnContextEvent(timestamp: "2026-02-22T07:00:00.001Z", model: "gpt-5.4", turnID: "parent-turn"),
+                makeTokenCountEvent(timestamp: "2026-02-22T07:00:00.002Z", total: parentUsage, last: parentUsage)
+            ]),
+            "2026/02/22/session-child.jsonl": buildLog(events: [
+                makeSessionMetaEvent(timestamp: "2026-02-22T07:05:00.000Z", sessionID: "child", forkedFromSessionID: "parent"),
+                makeSessionMetaEvent(timestamp: "2026-02-22T07:05:00.001Z", sessionID: "parent", forkedFromSessionID: nil),
+                makeTurnContextEvent(timestamp: "2026-02-22T07:05:00.002Z", model: "gpt-5.4", turnID: "parent-turn"),
+                makeTokenCountEvent(timestamp: "2026-02-22T07:05:00.003Z", total: parentUsage, last: parentUsage),
+                makeTurnContextEvent(timestamp: "2026-02-22T07:05:01.000Z", model: "gpt-5.4", turnID: "child-turn"),
+                makeTokenCountEvent(timestamp: "2026-02-22T07:05:01.001Z", total: childCumulative, last: childDelta)
+            ])
+        ]
+
+        let (service, rootURL) = try makeService(logsByPath: fileContents)
+        defer { try? FileManager.default.removeItem(at: rootURL) }
+
+        let aggregate = try service.fetchMonthlyTotals(for: date(year: 2026, month: 2, day: 22))
+
+        #expect(aggregate.totals == parentUsage.tokenTotals.adding(childDelta.tokenTotals))
+    }
+
     private func makeService(logsByPath: [String: String]) throws -> (TokenUsageService, URL) {
         let fileManager = FileManager.default
         let rootURL = fileManager.temporaryDirectory
@@ -253,13 +307,37 @@ struct TokageTests {
         events.joined()
     }
 
-    private func makeTurnContextEvent(timestamp: String, model: String) throws -> String {
+    private func makeSessionMetaEvent(timestamp: String, sessionID: String, forkedFromSessionID: String?) throws -> String {
+        var payload: [String: Any] = [
+            "id": sessionID
+        ]
+
+        if let forkedFromSessionID {
+            payload["forked_from_id"] = forkedFromSessionID
+        }
+
+        let event: [String: Any] = [
+            "timestamp": timestamp,
+            "type": "session_meta",
+            "payload": payload
+        ]
+
+        return try encode(event: event)
+    }
+
+    private func makeTurnContextEvent(timestamp: String, model: String, turnID: String? = nil) throws -> String {
+        var payload: [String: Any] = [
+            "model": model
+        ]
+
+        if let turnID {
+            payload["turn_id"] = turnID
+        }
+
         let event: [String: Any] = [
             "timestamp": timestamp,
             "type": "turn_context",
-            "payload": [
-                "model": model
-            ]
+            "payload": payload
         ]
 
         return try encode(event: event)

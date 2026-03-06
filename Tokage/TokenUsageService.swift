@@ -248,11 +248,72 @@ final class TokenUsageService {
         var previousTotals: TokenTotals?
         var lastUsageSignature: UsageSignature?
         var lastModel: String?
+        var replayState = SessionReplayState()
     }
 
     private struct UsageSignature: Hashable {
         let totalTokenUsage: TokenTotals?
         let lastTokenUsage: TokenTotals?
+    }
+
+    private struct SessionReplayState {
+        var currentSessionID: String?
+        var forkedFromSessionID: String?
+        var sawInheritedParentSession = false
+        var inheritedTurnID: String?
+        var ownTurnStarted = false
+
+        var isForkedSession: Bool {
+            guard let forkedFromSessionID else {
+                return false
+            }
+
+            return forkedFromSessionID.isEmpty == false
+        }
+
+        var shouldSkipTokenCounts: Bool {
+            sawInheritedParentSession && ownTurnStarted == false
+        }
+
+        mutating func consume(_ event: TokenLogLine) {
+            switch event.type {
+            case "session_meta":
+                guard let sessionID = event.payload?.sessionID, sessionID.isEmpty == false else {
+                    return
+                }
+
+                if currentSessionID == nil {
+                    currentSessionID = sessionID
+                    if let forkedFromSessionID = event.payload?.forkedFromSessionID,
+                       forkedFromSessionID.isEmpty == false {
+                        self.forkedFromSessionID = forkedFromSessionID
+                    }
+                    return
+                }
+
+                if let forkedFromSessionID, sessionID == forkedFromSessionID {
+                    sawInheritedParentSession = true
+                }
+
+            case "turn_context":
+                guard shouldSkipTokenCounts,
+                      let turnID = event.payload?.turnID,
+                      turnID.isEmpty == false else {
+                    return
+                }
+
+                if let inheritedTurnID {
+                    if inheritedTurnID != turnID {
+                        ownTurnStarted = true
+                    }
+                } else {
+                    inheritedTurnID = turnID
+                }
+
+            default:
+                return
+            }
+        }
     }
 
     private struct FileDescriptor {
@@ -366,6 +427,7 @@ final class TokenUsageService {
             var previousTotals: TokenTotals?
             var lastUsageSignature: UsageSignature?
             var lastModel: String?
+            var replayState = SessionReplayState()
 
             guard let data = try? Data(contentsOf: fileURL),
                   let content = String(data: data, encoding: .utf8) else {
@@ -384,12 +446,22 @@ final class TokenUsageService {
                     continue
                 }
 
+                replayState.consume(event)
+
                 if event.type == "turn_context" {
                     lastModel = resolvedModel(from: event.payload?.model, fallback: lastModel)
                     continue
                 }
 
                 guard event.type == "event_msg", event.payload?.type == "token_count" else {
+                    continue
+                }
+
+                if replayState.isForkedSession {
+                    continue
+                }
+
+                if replayState.shouldSkipTokenCounts {
                     continue
                 }
 
@@ -602,6 +674,7 @@ final class TokenUsageService {
         var hasUsage = state.hasTargetDayData
         var previousTotals = state.previousTotals
         var lastModel = state.lastModel
+        var replayState = state.replayState
 
         for line in lines {
             if line.isEmpty {
@@ -614,6 +687,8 @@ final class TokenUsageService {
                 continue
             }
 
+            replayState.consume(event)
+
             if event.type == "turn_context" {
                 lastModel = resolvedModel(from: event.payload?.model, fallback: lastModel)
                 continue
@@ -621,6 +696,8 @@ final class TokenUsageService {
 
             guard event.type == "event_msg" else { continue }
             guard event.payload?.type == "token_count" else { continue }
+            if replayState.isForkedSession { continue }
+            if replayState.shouldSkipTokenCounts { continue }
             let info = event.payload?.info
             let currentTotals = info?.totalTokenUsage
             let lastUsage = info?.lastTokenUsage
@@ -677,6 +754,7 @@ final class TokenUsageService {
         state.hasTargetDayData = hasUsage
         state.previousTotals = previousTotals
         state.lastModel = lastModel
+        state.replayState = replayState
 
         return (state, changed)
     }
@@ -737,6 +815,18 @@ private struct TokenLogLine: Decodable {
         let type: String?
         let model: String?
         let info: Info?
+        let sessionID: String?
+        let forkedFromSessionID: String?
+        let turnID: String?
+
+        enum CodingKeys: String, CodingKey {
+            case type
+            case model
+            case info
+            case sessionID = "id"
+            case forkedFromSessionID = "forked_from_id"
+            case turnID = "turn_id"
+        }
 
         struct Info: Decodable {
             let totalTokenUsage: TokenTotals?
