@@ -7,7 +7,7 @@ final class TokenUsageViewModel: ObservableObject {
     @Published private(set) var lastUpdated: Date?
     @Published var errorMessage: String?
     @Published private(set) var isLoading: Bool = false
-    @Published private(set) var todayTotals: TokenTotals?
+    @Published private(set) var todayUsage: UsageAggregate?
     @Published private(set) var historicalSummaries: [HistoricalSummary] = []
     @Published private(set) var monthSummary: MonthlySummary?
 
@@ -26,9 +26,9 @@ final class TokenUsageViewModel: ObservableObject {
         return formatter
     }()
     private var timerCancellable: AnyCancellable?
-    private var historicalCache: [String: TokenTotals] = [:]
-    private var monthCache: [String: TokenTotals] = [:]
-    private var lastTodayTotalsByMonth: [String: TokenTotals] = [:]
+    private var historicalCache: [String: UsageAggregate] = [:]
+    private var monthCache: [String: UsageAggregate] = [:]
+    private var lastTodayUsageByMonth: [String: UsageAggregate] = [:]
     private var lastDayKeyByMonth: [String: String] = [:]
     private let hasSeenUsageDataKey = "TokageHasSeenUsageData"
 
@@ -37,8 +37,8 @@ final class TokenUsageViewModel: ObservableObject {
         set { UserDefaults.standard.set(newValue, forKey: hasSeenUsageDataKey) }
     }
 
-    init(service: TokenUsageService = TokenUsageService()) {
-        self.service = service
+    init(service: TokenUsageService? = nil) {
+        self.service = service ?? TokenUsageService()
         refresh()
         startTimer()
     }
@@ -57,16 +57,16 @@ final class TokenUsageViewModel: ObservableObject {
             guard let self = self else { return }
             let referenceDate = Date()
             var usage: [DailyTokenUsage] = []
-            var newTodayTotals: TokenTotals?
+            var newTodayUsage: UsageAggregate?
             var terminalError: Error?
 
             do {
                 usage = try service.fetchDailyUsage(for: referenceDate)
-                newTodayTotals = usage.first?.totals
+                newTodayUsage = usage.first?.aggregate
             } catch let tokenError as TokenUsageError {
                 switch tokenError {
                 case .missingMonthDirectory:
-                    newTodayTotals = .zero
+                    newTodayUsage = .zero
                 case .missingSessionsDirectory:
                     terminalError = tokenError
                 }
@@ -80,7 +80,7 @@ final class TokenUsageViewModel: ObservableObject {
                     if let tokenError = terminalError as? TokenUsageError,
                        case .missingSessionsDirectory = tokenError {
                         self.dailyUsages = []
-                        self.todayTotals = .zero
+                        self.todayUsage = .zero
                         self.isLoading = false
                         self.errorMessage = nil
                         self.lastUpdated = Date()
@@ -92,7 +92,7 @@ final class TokenUsageViewModel: ObservableObject {
                     }
 
                     self.dailyUsages = []
-                    self.todayTotals = nil
+                    self.todayUsage = nil
                     self.isLoading = false
                     self.errorMessage = terminalError.localizedDescription
                     self.historicalSummaries = []
@@ -114,18 +114,18 @@ final class TokenUsageViewModel: ObservableObject {
             await MainActor.run { [weak self] in
                 guard let self = self else { return }
 
-                for (key, totals) in fetchResult.historical {
-                    self.historicalCache[key] = totals
+                for (key, aggregate) in fetchResult.historical {
+                    self.historicalCache[key] = aggregate
                 }
 
                 let historical = self.buildHistoricalSummaries(plan: plan)
                 let monthSummary = self.updateMonthSummary(
                     referenceDate: referenceDate,
-                    todayTotals: newTodayTotals,
+                    todayUsage: newTodayUsage,
                     prefetchedTotals: fetchResult.monthTotals
                 )
 
-                let sawData = (newTodayTotals?.isZero == false)
+                let sawData = (newTodayUsage?.isZero == false)
                     || (fetchResult.historical.isEmpty == false)
                     || (fetchResult.monthTotals != nil)
                 if sawData {
@@ -133,7 +133,7 @@ final class TokenUsageViewModel: ObservableObject {
                 }
 
                 self.dailyUsages = usage
-                self.todayTotals = newTodayTotals
+                self.todayUsage = newTodayUsage
                 self.lastUpdated = Date()
                 self.isLoading = false
                 self.historicalSummaries = historical
@@ -156,14 +156,14 @@ extension TokenUsageViewModel {
         let id: String
         let label: String
         let date: Date
-        let totals: TokenTotals
+        let aggregate: UsageAggregate
     }
 
     struct MonthlySummary: Identifiable {
         let id: String
         let label: String
         let date: Date
-        let totals: TokenTotals
+        let aggregate: UsageAggregate
     }
 
     private struct HistoricalDatePlan {
@@ -180,8 +180,8 @@ extension TokenUsageViewModel {
     }
 
     private struct BackgroundFetchResult {
-        let historical: [String: TokenTotals]
-        let monthTotals: TokenTotals?
+        let historical: [String: UsageAggregate]
+        let monthTotals: UsageAggregate?
     }
 
     var formattedLastUpdated: String {
@@ -193,8 +193,8 @@ extension TokenUsageViewModel {
     }
 
     var todaySummaryText: String? {
-        guard let totals = todayTotals else { return nil }
-        return TokenUsageFormatter.shared.summary(totals: totals)
+        guard let todayUsage else { return nil }
+        return TokenUsageFormatter.shared.summary(usage: todayUsage)
     }
 
     var menuBarSummaryText: String {
@@ -210,9 +210,9 @@ extension TokenUsageViewModel {
 
     private func buildHistoricalSummaries(plan: ComputationPlan) -> [HistoricalSummary] {
         plan.historicalDates.compactMap { item in
-            guard let totals = historicalCache[item.key] else { return nil }
+            guard let aggregate = historicalCache[item.key] else { return nil }
             let label = item.isYesterday ? "Yesterday" : formattedDateLabel(for: item.date)
-            return HistoricalSummary(id: item.key, label: label, date: item.date, totals: totals)
+            return HistoricalSummary(id: item.key, label: label, date: item.date, aggregate: aggregate)
         }
     }
 
@@ -253,22 +253,26 @@ extension TokenUsageViewModel {
         return "\(day)\(suffix)"
     }
 
-    private func updateMonthSummary(referenceDate: Date, todayTotals: TokenTotals?, prefetchedTotals: TokenTotals?) -> MonthlySummary? {
+    private func updateMonthSummary(
+        referenceDate: Date,
+        todayUsage: UsageAggregate?,
+        prefetchedTotals: UsageAggregate?
+    ) -> MonthlySummary? {
         let key = monthKey(for: referenceDate)
         let monthName = monthLabel(for: referenceDate)
         let label = "This Month (\(monthName))"
         let currentDayKey = dayKey(for: referenceDate)
 
         if lastDayKeyByMonth[key] != currentDayKey {
-            lastTodayTotalsByMonth[key] = .zero
+            lastTodayUsageByMonth[key] = .zero
         }
 
-        var monthTotals: TokenTotals?
+        var monthTotals: UsageAggregate?
 
-        if let prefetchedTotals = prefetchedTotals {
+        if let prefetchedTotals {
             monthTotals = prefetchedTotals
             monthCache[key] = prefetchedTotals
-            lastTodayTotalsByMonth[key] = todayTotals ?? .zero
+            lastTodayUsageByMonth[key] = todayUsage ?? .zero
             lastDayKeyByMonth[key] = currentDayKey
         } else {
             monthTotals = monthCache[key]
@@ -276,25 +280,25 @@ extension TokenUsageViewModel {
 
         if monthTotals == nil {
             return nil
-        } else if let todayTotals {
-            let previousToday = lastTodayTotalsByMonth[key] ?? .zero
-            if todayTotals != previousToday {
-                let delta = difference(between: todayTotals, and: previousToday)
+        } else if let todayUsage {
+            let previousToday = lastTodayUsageByMonth[key] ?? .zero
+            if todayUsage != previousToday {
+                let delta = difference(between: todayUsage, and: previousToday)
                 monthTotals = monthTotals!.adding(delta)
                 monthCache[key] = monthTotals
-                lastTodayTotalsByMonth[key] = todayTotals
+                lastTodayUsageByMonth[key] = todayUsage
                 lastDayKeyByMonth[key] = currentDayKey
             }
         } else {
-            lastTodayTotalsByMonth[key] = .zero
+            lastTodayUsageByMonth[key] = .zero
             lastDayKeyByMonth[key] = currentDayKey
         }
 
-        guard let totals = monthTotals else {
+        guard let aggregate = monthTotals else {
             return nil
         }
 
-        return MonthlySummary(id: key, label: label, date: referenceDate, totals: totals)
+        return MonthlySummary(id: key, label: label, date: referenceDate, aggregate: aggregate)
     }
 
     private func monthKey(for date: Date) -> String {
@@ -309,13 +313,21 @@ extension TokenUsageViewModel {
         monthFormatter.string(from: date)
     }
 
-    private func difference(between current: TokenTotals, and previous: TokenTotals) -> TokenTotals {
-        TokenTotals(
-            inputTokens: max(current.inputTokens - previous.inputTokens, 0),
-            cachedInputTokens: max(current.cachedInputTokens - previous.cachedInputTokens, 0),
-            outputTokens: max(current.outputTokens - previous.outputTokens, 0),
-            reasoningOutputTokens: max(current.reasoningOutputTokens - previous.reasoningOutputTokens, 0),
-            totalTokens: max(current.totalTokens - previous.totalTokens, 0)
+    private func difference(between current: UsageAggregate, and previous: UsageAggregate) -> UsageAggregate {
+        UsageAggregate(
+            totals: TokenTotals(
+                inputTokens: max(current.totals.inputTokens - previous.totals.inputTokens, 0),
+                cachedInputTokens: max(current.totals.cachedInputTokens - previous.totals.cachedInputTokens, 0),
+                outputTokens: max(current.totals.outputTokens - previous.totals.outputTokens, 0),
+                reasoningOutputTokens: max(current.totals.reasoningOutputTokens - previous.totals.reasoningOutputTokens, 0),
+                totalTokens: max(current.totals.totalTokens - previous.totals.totalTokens, 0)
+            ),
+            costs: CostTotals(
+                inputCost: max(current.costs.inputCost - previous.costs.inputCost, 0),
+                cachedInputCost: max(current.costs.cachedInputCost - previous.costs.cachedInputCost, 0),
+                outputCost: max(current.costs.outputCost - previous.costs.outputCost, 0),
+                reasoningCost: max(current.costs.reasoningCost - previous.costs.reasoningCost, 0)
+            )
         )
     }
 
@@ -347,18 +359,22 @@ extension TokenUsageViewModel {
         )
     }
 
-    private static func performBackgroundFetch(plan: ComputationPlan, referenceDate: Date, service: TokenUsageService) -> BackgroundFetchResult {
-        var historical: [String: TokenTotals] = [:]
+    private static func performBackgroundFetch(
+        plan: ComputationPlan,
+        referenceDate: Date,
+        service: TokenUsageService
+    ) -> BackgroundFetchResult {
+        var historical: [String: UsageAggregate] = [:]
         for item in plan.missingHistorical {
             if
                 let usage = try? service.fetchDailyUsage(for: item.date),
-                let totals = usage.first?.totals
+                let aggregate = usage.first?.aggregate
             {
-                historical[item.key] = totals
+                historical[item.key] = aggregate
             }
         }
 
-        let monthTotals: TokenTotals?
+        let monthTotals: UsageAggregate?
         if plan.needsMonthFetch {
             monthTotals = try? service.fetchMonthlyTotals(for: referenceDate)
         } else {

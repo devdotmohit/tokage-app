@@ -7,7 +7,8 @@ Tokage is a lightweight macOS menu‑bar utility that tallies your Codex JSONL s
 - **Menu‑bar first**: Runs headless with a Menu Bar Extra on macOS 13+, showing today’s usage, quick refresh, and a Quit action.  
 - **Daily focus**: Reads JSONL session logs under `~/.codex/sessions/YYYY/MM/DD` and counts any token events found there without re-checking timestamps (trusts local folder structure).  
 - **Historical rollup**: Caches the previous six days (yesterday + five more) and a calendar-month summary, refreshing only the missing days to reduce disk churn.  
-- **Cost breakdown**: Mirrors ccusage logic for billable vs cached input, output, and reasoning tokens; reasoning is billed at the output rate.  
+- **Model-aware pricing**: Reads `turn_context` model ids and applies bundled GPT-5 family pricing, with a generic fallback for unknown models.  
+- **Cost breakdown**: Mirrors ccusage logic for billable vs cached input, output, and reasoning tokens; reasoning is billed at the active model’s output rate.  
 - **Safe fallback**: If a day folder is empty we fall back to month-level logs while filtering by timestamp, so misfiled entries still count correctly.
 
 ## Usage

@@ -1,0 +1,95 @@
+{
+  "defaultRates": {
+    "input": 1.25,
+    "cachedInput": 0.125,
+    "output": 10.0
+  },
+  "models": {
+    "gpt-5": {
+      "input": 1.25,
+      "cachedInput": 0.125,
+      "output": 10.0
+    },
+    "gpt-5-chat-latest": {
+      "input": 1.25,
+      "cachedInput": 0.125,
+      "output": 10.0
+    },
+    "gpt-5-mini": {
+      "input": 0.25,
+      "cachedInput": 0.025,
+      "output": 2.0
+    },
+    "gpt-5-nano": {
+      "input": 0.05,
+      "cachedInput": 0.005,
+      "output": 0.4
+    },
+    "gpt-5-pro": {
+      "input": 15.0,
+      "output": 120.0
+    },
+    "gpt-5-codex": {
+      "input": 1.25,
+      "cachedInput": 0.125,
+      "output": 10.0
+    },
+    "gpt-5.1": {
+      "input": 1.25,
+      "cachedInput": 0.125,
+      "output": 10.0
+    },
+    "gpt-5.1-codex": {
+      "input": 1.25,
+      "cachedInput": 0.125,
+      "output": 10.0
+    },
+    "gpt-5.1-codex-mini": {
+      "input": 0.25,
+      "cachedInput": 0.025,
+      "output": 2.0
+    },
+    "gpt-5.2": {
+      "input": 1.75,
+      "cachedInput": 0.175,
+      "output": 14.0
+    },
+    "gpt-5.2-chat-latest": {
+      "input": 1.75,
+      "cachedInput": 0.175,
+      "output": 14.0
+    },
+    "gpt-5.2-codex": {
+      "input": 1.75,
+      "cachedInput": 0.175,
+      "output": 14.0
+    },
+    "gpt-5.2-pro": {
+      "input": 21.0,
+      "output": 168.0
+    },
+    "gpt-5.3-chat-latest": {
+      "input": 1.75,
+      "cachedInput": 0.175,
+      "output": 14.0
+    },
+    "gpt-5.3-codex": {
+      "input": 1.75,
+      "cachedInput": 0.175,
+      "output": 14.0
+    },
+    "gpt-5.4": {
+      "input": 2.5,
+      "cachedInput": 0.25,
+      "output": 15.0
+    },
+    "gpt-5.4-pro": {
+      "input": 30.0,
+      "output": 180.0
+    }
+  },
+  "aliases": {
+    "gpt-5.1-codex-max": "gpt-5.1-codex",
+    "gpt-5.3-codex-spark": "gpt-5.3-codex"
+  }
+}

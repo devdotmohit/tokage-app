@@ -102,7 +102,6 @@ struct TokenTotals: Decodable, Equatable, Hashable {
     }
 
     var billingTokenTotal: Int {
-        // Reasoning tokens are billed on top of output tokens, so we include them separately here.
         billedInputTokens + cachedInputTokens + outputTokens + reasoningOutputTokens
     }
 
@@ -129,17 +128,93 @@ struct TokenTotals: Decodable, Equatable, Hashable {
     }
 }
 
+struct CostTotals: Equatable, Hashable {
+    let inputCost: Double
+    let cachedInputCost: Double
+    let outputCost: Double
+    let reasoningCost: Double
+
+    init(inputCost: Double, cachedInputCost: Double, outputCost: Double, reasoningCost: Double) {
+        self.inputCost = inputCost
+        self.cachedInputCost = cachedInputCost
+        self.outputCost = outputCost
+        self.reasoningCost = reasoningCost
+    }
+
+    init(totals: TokenTotals, rates: ModelRates) {
+        self.init(
+            inputCost: CostTotals.cost(tokens: totals.billedInputTokens, rate: rates.input),
+            cachedInputCost: CostTotals.cost(tokens: totals.cachedInputTokens, rate: rates.cachedInputRate),
+            outputCost: CostTotals.cost(tokens: totals.outputTokens, rate: rates.output),
+            reasoningCost: CostTotals.cost(tokens: totals.reasoningOutputTokens, rate: rates.output)
+        )
+    }
+
+    static let zero = CostTotals(inputCost: 0, cachedInputCost: 0, outputCost: 0, reasoningCost: 0)
+
+    var totalCost: Double {
+        inputCost + cachedInputCost + outputCost + reasoningCost
+    }
+
+    var isZero: Bool {
+        totalCost == 0
+    }
+
+    func adding(_ other: CostTotals) -> CostTotals {
+        CostTotals(
+            inputCost: inputCost + other.inputCost,
+            cachedInputCost: cachedInputCost + other.cachedInputCost,
+            outputCost: outputCost + other.outputCost,
+            reasoningCost: reasoningCost + other.reasoningCost
+        )
+    }
+
+    private static func cost(tokens: Int, rate: Double) -> Double {
+        (Double(tokens) * rate) / 1_000_000
+    }
+}
+
+struct UsageAggregate: Equatable, Hashable {
+    let totals: TokenTotals
+    let costs: CostTotals
+
+    static let zero = UsageAggregate(totals: .zero, costs: .zero)
+
+    var isZero: Bool {
+        totals.isZero && costs.isZero
+    }
+
+    var billingTokenTotal: Int {
+        totals.billingTokenTotal
+    }
+
+    func adding(_ other: UsageAggregate) -> UsageAggregate {
+        UsageAggregate(
+            totals: totals.adding(other.totals),
+            costs: costs.adding(other.costs)
+        )
+    }
+}
+
 struct DailyTokenUsage: Identifiable {
     let id: String
     let date: Date
     let displayDate: String
-    let totals: TokenTotals
+    let aggregate: UsageAggregate
 
-    init(dayIdentifier: String, date: Date, displayDate: String, totals: TokenTotals) {
+    init(dayIdentifier: String, date: Date, displayDate: String, aggregate: UsageAggregate) {
         self.id = dayIdentifier
         self.date = date
         self.displayDate = displayDate
-        self.totals = totals
+        self.aggregate = aggregate
+    }
+
+    var totals: TokenTotals {
+        aggregate.totals
+    }
+
+    var costs: CostTotals {
+        aggregate.costs
     }
 }
 
@@ -167,25 +242,28 @@ final class TokenUsageService {
     private struct FileState {
         var offset: UInt64 = 0
         var leftover: String?
-        var totals: TokenTotals = .zero
+        var aggregate: UsageAggregate = .zero
         var hasTargetDayData: Bool = false
         var fileIdentifier: UInt64?
         var previousTotals: TokenTotals?
-        var lastSignature: EventSignature?
+        var lastUsageSignature: UsageSignature?
+        var lastModel: String?
     }
 
-    private struct EventSignature: Hashable {
-        let timestamp: String
-        let totals: TokenTotals?
+    private struct UsageSignature: Hashable {
+        let totalTokenUsage: TokenTotals?
+        let lastTokenUsage: TokenTotals?
+    }
 
-        func hash(into hasher: inout Hasher) {
-            hasher.combine(timestamp)
-            hasher.combine(totals)
-        }
+    private struct FileDescriptor {
+        let url: URL
+        let enforceTimestamp: Bool
     }
 
     private let fileManager: FileManager
     private let calendar: Calendar
+    private let sessionsRootURL: URL?
+    private let pricingCatalog: ModelPricingCatalog
     private let decoder = JSONDecoder()
     private let isoFormatter: ISO8601DateFormatter
     private lazy var dayFormatter: DateFormatter = {
@@ -200,19 +278,23 @@ final class TokenUsageService {
     private var cachedUsage: [DailyTokenUsage]?
     private var cacheDirty = true
 
-    init(fileManager: FileManager = .default, calendar: Calendar = .current) {
+    init(
+        fileManager: FileManager = .default,
+        calendar: Calendar = .current,
+        sessionsRootURL: URL? = nil,
+        pricingCatalog: ModelPricingCatalog = ModelPricingCatalog.load()
+    ) {
         self.fileManager = fileManager
         self.calendar = calendar
+        self.sessionsRootURL = sessionsRootURL
+        self.pricingCatalog = pricingCatalog
         self.isoFormatter = ISO8601DateFormatter()
         self.isoFormatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
     }
 
     func fetchDailyUsage(for date: Date = Date()) throws -> [DailyTokenUsage] {
         let key = makeCacheKey(for: date)
-
-        let rootURL = fileManager.homeDirectoryForCurrentUser
-            .appendingPathComponent(".codex", isDirectory: true)
-            .appendingPathComponent("sessions", isDirectory: true)
+        let rootURL = resolvedRootURL()
 
         guard fileManager.fileExists(atPath: rootURL.path) else {
             throw TokenUsageError.missingSessionsDirectory
@@ -260,6 +342,107 @@ final class TokenUsageService {
         cachedUsage = usage
         cacheDirty = false
         return usage
+    }
+
+    func fetchMonthlyTotals(for date: Date = Date()) throws -> UsageAggregate {
+        let key = makeCacheKey(for: date)
+        let rootURL = resolvedRootURL()
+
+        guard fileManager.fileExists(atPath: rootURL.path) else {
+            throw TokenUsageError.missingSessionsDirectory
+        }
+
+        guard let monthDirectory = monthDirectory(for: key, rootURL: rootURL) else {
+            throw TokenUsageError.missingMonthDirectory
+        }
+
+        guard let enumerator = fileManager.enumerator(at: monthDirectory, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles]) else {
+            throw TokenUsageError.missingMonthDirectory
+        }
+
+        var monthAggregate: UsageAggregate = .zero
+
+        for case let fileURL as URL in enumerator where fileURL.pathExtension == "jsonl" {
+            var previousTotals: TokenTotals?
+            var lastUsageSignature: UsageSignature?
+            var lastModel: String?
+
+            guard let data = try? Data(contentsOf: fileURL),
+                  let content = String(data: data, encoding: .utf8) else {
+                continue
+            }
+
+            for line in content.split(separator: "\n") {
+                if line.isEmpty {
+                    continue
+                }
+
+                guard
+                    let lineData = line.data(using: .utf8),
+                    let event = try? decoder.decode(TokenLogLine.self, from: lineData)
+                else {
+                    continue
+                }
+
+                if event.type == "turn_context" {
+                    lastModel = resolvedModel(from: event.payload?.model, fallback: lastModel)
+                    continue
+                }
+
+                guard event.type == "event_msg", event.payload?.type == "token_count" else {
+                    continue
+                }
+
+                guard let timestamp = event.timestamp,
+                      let eventDate = isoFormatter.date(from: timestamp),
+                      calendar.isDate(eventDate, equalTo: date, toGranularity: .month) else {
+                    continue
+                }
+
+                let info = event.payload?.info
+                let currentTotals = info?.totalTokenUsage
+                let lastUsage = info?.lastTokenUsage
+                let signature = UsageSignature(totalTokenUsage: currentTotals, lastTokenUsage: lastUsage)
+
+                if let priorSignature = lastUsageSignature, priorSignature == signature {
+                    if let currentTotals = currentTotals {
+                        previousTotals = currentTotals
+                    }
+                    continue
+                }
+                lastUsageSignature = signature
+
+                var deltaTotals: TokenTotals?
+
+                if let lastUsage = lastUsage {
+                    deltaTotals = lastUsage
+                } else if let currentTotals = currentTotals {
+                    if let previous = previousTotals {
+                        deltaTotals = currentTotals.delta(since: previous)
+                    } else {
+                        previousTotals = currentTotals
+                        continue
+                    }
+                }
+
+                if let currentTotals = currentTotals {
+                    previousTotals = currentTotals
+                }
+
+                guard let deltaTotals else {
+                    continue
+                }
+
+                let normalizedDelta = deltaTotals.normalized()
+                guard normalizedDelta.isZero == false else {
+                    continue
+                }
+
+                monthAggregate = monthAggregate.adding(makeUsageAggregate(for: normalizedDelta, model: lastModel))
+            }
+        }
+
+        return monthAggregate
     }
 
     private func makeCacheKey(for date: Date) -> CacheKey {
@@ -349,7 +532,12 @@ final class TokenUsageService {
         calendar.date(from: DateComponents(year: key.year, month: key.month, day: key.day))
     }
 
-    private func processFile(at url: URL, previousState: FileState?, targetDay: Date, enforceTimestamp: Bool) -> (FileState, Bool) {
+    private func processFile(
+        at url: URL,
+        previousState: FileState?,
+        targetDay: Date,
+        enforceTimestamp: Bool
+    ) -> (FileState, Bool) {
         var state = previousState ?? FileState()
         var changed = false
 
@@ -410,9 +598,10 @@ final class TokenUsageService {
             return (state, changed)
         }
 
-        var totals = state.totals
+        var aggregate = state.aggregate
         var hasUsage = state.hasTargetDayData
         var previousTotals = state.previousTotals
+        var lastModel = state.lastModel
 
         for line in lines {
             if line.isEmpty {
@@ -425,6 +614,11 @@ final class TokenUsageService {
                 continue
             }
 
+            if event.type == "turn_context" {
+                lastModel = resolvedModel(from: event.payload?.model, fallback: lastModel)
+                continue
+            }
+
             guard event.type == "event_msg" else { continue }
             guard event.payload?.type == "token_count" else { continue }
             let info = event.payload?.info
@@ -433,11 +627,14 @@ final class TokenUsageService {
             guard let timestamp = event.timestamp else { continue }
             guard let eventDate = isoFormatter.date(from: timestamp) else { continue }
 
-            let signature = EventSignature(timestamp: timestamp, totals: currentTotals ?? lastUsage)
-            if let lastSignature = state.lastSignature, lastSignature == signature {
+            let signature = UsageSignature(totalTokenUsage: currentTotals, lastTokenUsage: lastUsage)
+            if let lastSignature = state.lastUsageSignature, lastSignature == signature {
+                if let currentTotals = currentTotals {
+                    previousTotals = currentTotals
+                }
                 continue
             }
-            state.lastSignature = signature
+            state.lastUsageSignature = signature
 
             var deltaTotals: TokenTotals?
 
@@ -445,8 +642,7 @@ final class TokenUsageService {
                 deltaTotals = lastUsage
             } else if let currentTotals = currentTotals {
                 if let previous = previousTotals {
-                    let rawDelta = currentTotals.delta(since: previous)
-                    deltaTotals = rawDelta
+                    deltaTotals = currentTotals.delta(since: previous)
                 } else {
                     previousTotals = currentTotals
                     continue
@@ -459,7 +655,7 @@ final class TokenUsageService {
                 previousTotals = currentTotals
             }
 
-            guard let deltaTotals = deltaTotals else {
+            guard let deltaTotals else {
                 continue
             }
 
@@ -472,24 +668,25 @@ final class TokenUsageService {
                 continue
             }
 
-            totals = totals.adding(normalizedDelta)
+            aggregate = aggregate.adding(makeUsageAggregate(for: normalizedDelta, model: lastModel))
             hasUsage = true
             changed = true
         }
 
-        state.totals = totals
+        state.aggregate = aggregate
         state.hasTargetDayData = hasUsage
         state.previousTotals = previousTotals
+        state.lastModel = lastModel
 
         return (state, changed)
     }
 
     private func buildUsage(for targetDay: Date) throws -> [DailyTokenUsage] {
-        var totals: TokenTotals = .zero
+        var aggregate: UsageAggregate = .zero
         var sawUsage = false
 
         for state in fileStates.values {
-            totals = totals.adding(state.totals)
+            aggregate = aggregate.adding(state.aggregate)
             sawUsage = sawUsage || state.hasTargetDayData
         }
 
@@ -502,101 +699,32 @@ final class TokenUsageService {
             dayIdentifier: displayDate,
             date: targetDay,
             displayDate: displayDate,
-            totals: totals
+            aggregate: aggregate
         )
 
         return [usage]
     }
 
-    func fetchMonthlyTotals(for date: Date = Date()) throws -> TokenTotals {
-        let key = makeCacheKey(for: date)
+    private func makeUsageAggregate(for totals: TokenTotals, model: String?) -> UsageAggregate {
+        let rates = pricingCatalog.rates(for: model)
+        return UsageAggregate(totals: totals, costs: CostTotals(totals: totals, rates: rates))
+    }
 
-        let rootURL = fileManager.homeDirectoryForCurrentUser
+    private func resolvedModel(from model: String?, fallback: String?) -> String? {
+        guard let model, model.isEmpty == false else {
+            return fallback
+        }
+        return model
+    }
+
+    private func resolvedRootURL() -> URL {
+        if let sessionsRootURL {
+            return sessionsRootURL
+        }
+
+        return fileManager.homeDirectoryForCurrentUser
             .appendingPathComponent(".codex", isDirectory: true)
             .appendingPathComponent("sessions", isDirectory: true)
-
-        guard fileManager.fileExists(atPath: rootURL.path) else {
-            throw TokenUsageError.missingSessionsDirectory
-        }
-
-        guard let monthDirectory = monthDirectory(for: key, rootURL: rootURL) else {
-            throw TokenUsageError.missingMonthDirectory
-        }
-
-        guard let enumerator = fileManager.enumerator(at: monthDirectory, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles]) else {
-            throw TokenUsageError.missingMonthDirectory
-        }
-
-        var monthTotals: TokenTotals = .zero
-        var processedSignatures: Set<EventSignature> = []
-
-        for case let fileURL as URL in enumerator where fileURL.pathExtension == "jsonl" {
-            var previousTotals: TokenTotals?
-
-            guard let data = try? Data(contentsOf: fileURL),
-                  let content = String(data: data, encoding: .utf8) else {
-                continue
-            }
-
-            for line in content.split(separator: "\n") {
-                if line.isEmpty {
-                    continue
-                }
-
-                guard
-                    let lineData = line.data(using: .utf8),
-                    let event = try? decoder.decode(TokenLogLine.self, from: lineData)
-                else {
-                    continue
-                }
-
-                guard event.type == "event_msg", event.payload?.type == "token_count" else {
-                    continue
-                }
-
-                guard let timestamp = event.timestamp,
-                      let eventDate = isoFormatter.date(from: timestamp),
-                      calendar.isDate(eventDate, equalTo: date, toGranularity: .month) else {
-                    continue
-                }
-
-                let info = event.payload?.info
-                let currentTotals = info?.totalTokenUsage
-                let lastUsage = info?.lastTokenUsage
-
-                let signature = EventSignature(timestamp: timestamp, totals: currentTotals ?? lastUsage)
-                if processedSignatures.contains(signature) {
-                    continue
-                }
-                processedSignatures.insert(signature)
-
-                var delta: TokenTotals?
-
-                if let lastUsage = lastUsage {
-                    delta = lastUsage
-                } else if let currentTotals = currentTotals {
-                    if let previous = previousTotals {
-                        delta = currentTotals.delta(since: previous)
-                        previousTotals = currentTotals
-                    } else {
-                        previousTotals = currentTotals
-                        continue
-                    }
-                }
-
-                if let currentTotals = currentTotals {
-                    previousTotals = currentTotals
-                }
-
-                guard let normalizedDelta = delta?.normalized(), normalizedDelta.isZero == false else {
-                    continue
-                }
-
-                monthTotals = monthTotals.adding(normalizedDelta)
-            }
-        }
-
-        return monthTotals
     }
 }
 
@@ -606,13 +734,9 @@ private struct TokenLogLine: Decodable {
     let payload: Payload?
 
     struct Payload: Decodable {
-        let type: String
+        let type: String?
+        let model: String?
         let info: Info?
-
-        enum CodingKeys: String, CodingKey {
-            case type
-            case info
-        }
 
         struct Info: Decodable {
             let totalTokenUsage: TokenTotals?
@@ -625,7 +749,3 @@ private struct TokenLogLine: Decodable {
         }
     }
 }
-    private struct FileDescriptor {
-        let url: URL
-        let enforceTimestamp: Bool
-    }

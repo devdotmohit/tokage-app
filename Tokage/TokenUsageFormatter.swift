@@ -36,40 +36,40 @@ struct TokenUsageFormatter {
     }
 
     func header(for usage: DailyTokenUsage) -> String {
+        "\(usage.displayDate) — \(formatTokens(usage.aggregate.billingTokenTotal)) • \(formatCurrency(for: usage.costs.totalCost))"
+    }
+
+    func summary(usage: UsageAggregate) -> String {
+        "\(formatTokens(usage.billingTokenTotal)) • \(formatCurrency(for: usage.costs.totalCost))"
+    }
+
+    func breakdown(for usage: UsageAggregate) -> [TokenBreakdown] {
         let totals = usage.totals
-        return "\(usage.displayDate) — \(formatTokens(totals.billingTokenTotal)) • \(formatCost(for: totals))"
-    }
-
-    func summary(totals: TokenTotals) -> String {
-        "\(formatTokens(totals.billingTokenTotal)) • \(formatCost(for: totals))"
-    }
-
-    func breakdown(for totals: TokenTotals) -> [TokenBreakdown] {
-        let billedInput = totals.billedInputTokens
+        let costs = usage.costs
         return [
             TokenBreakdown(
                 kind: .input,
                 label: "Input",
-                tokensText: formatTokens(billedInput),
-                costText: formatCurrency(for: cost(tokens: billedInput, rate: Pricing.input))
+                tokensText: formatTokens(totals.billedInputTokens),
+                costText: formatCurrency(for: costs.inputCost)
             ),
             TokenBreakdown(
                 kind: .cached,
                 label: "Cached",
                 tokensText: formatTokens(totals.cachedInputTokens),
-                costText: formatCurrency(for: cost(tokens: totals.cachedInputTokens, rate: Pricing.cache))
+                costText: formatCurrency(for: costs.cachedInputCost)
             ),
             TokenBreakdown(
                 kind: .output,
                 label: "Output",
                 tokensText: formatTokens(totals.outputTokens),
-                costText: formatCurrency(for: cost(tokens: totals.outputTokens, rate: Pricing.output))
+                costText: formatCurrency(for: costs.outputCost)
             ),
             TokenBreakdown(
                 kind: .reasoning,
                 label: "Reasoning",
                 tokensText: formatTokens(totals.reasoningOutputTokens),
-                costText: formatCurrency(for: cost(tokens: totals.reasoningOutputTokens, rate: Pricing.reasoning))
+                costText: formatCurrency(for: costs.reasoningCost)
             )
         ]
     }
@@ -87,20 +87,6 @@ struct TokenUsageFormatter {
         }
     }
 
-    private func formatCost(for totals: TokenTotals) -> String {
-        let billedInput = totals.billedInputTokens
-        let cost = cost(tokens: billedInput, rate: Pricing.input) +
-            cost(tokens: totals.cachedInputTokens, rate: Pricing.cache) +
-            cost(tokens: totals.outputTokens, rate: Pricing.output) +
-            cost(tokens: totals.reasoningOutputTokens, rate: Pricing.reasoning)
-
-        return formatCurrency(for: cost)
-    }
-
-    private func cost(tokens: Int, rate: Double) -> Double {
-        (Double(tokens) * rate) / 1_000_000
-    }
-
     private func formatCurrency(for cost: Double) -> String {
         String(format: "$%.2f", cost)
     }
@@ -116,11 +102,4 @@ struct TokenUsageFormatter {
         }
         return trimmed + suffix
     }
-}
-
-private enum Pricing {
-    static let input = 1.25
-    static let cache = 0.125
-    static let output = 10.00
-    static let reasoning = 10.00
 }

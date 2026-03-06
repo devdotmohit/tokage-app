@@ -91,7 +91,7 @@ extension ContentView {
                     dayIdentifier: summary.id,
                     date: summary.date,
                     displayDate: summary.label,
-                    totals: summary.totals
+                    aggregate: summary.aggregate
                 ))
             }
             if let monthSummary = viewModel.monthSummary {
@@ -102,7 +102,7 @@ extension ContentView {
                     dayIdentifier: monthSummary.id,
                     date: monthSummary.date,
                     displayDate: monthSummary.label,
-                    totals: monthSummary.totals
+                    aggregate: monthSummary.aggregate
                 ))
             }
         }

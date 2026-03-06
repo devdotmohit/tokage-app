@@ -44,8 +44,8 @@ private struct MenuContent: View {
     private let formatter = TokenUsageFormatter.shared
 
     var body: some View {
-        if let totals = viewModel.todayTotals {
-            TokenBreakdownMenu(totals: totals)
+        if let todayUsage = viewModel.todayUsage {
+            TokenBreakdownMenu(usage: todayUsage)
             Divider()
         }
 
@@ -55,7 +55,7 @@ private struct MenuContent: View {
                     .font(.headline)
                 ForEach(viewModel.historicalSummaries) { summary in
                     Button(action: {}) {
-                        Label("\(summary.label): \(formatter.summary(totals: summary.totals))", systemImage: "calendar")
+                        Label("\(summary.label): \(formatter.summary(usage: summary.aggregate))", systemImage: "calendar")
                     }
                     .buttonStyle(.borderless)
                 }
@@ -64,7 +64,7 @@ private struct MenuContent: View {
                         Divider()
                     }
                     Button(action: {}) {
-                        Label("\(monthSummary.label): \(formatter.summary(totals: monthSummary.totals))", systemImage: "calendar.badge.clock")
+                        Label("\(monthSummary.label): \(formatter.summary(usage: monthSummary.aggregate))", systemImage: "calendar.badge.clock")
                     }
                     .buttonStyle(.borderless)
                 }
@@ -109,11 +109,11 @@ private struct CheckForUpdatesView: View {
 
 @available(macOS 13.0, *)
 private struct TokenBreakdownMenu: View {
-    let totals: TokenTotals
+    let usage: UsageAggregate
     private let formatter = TokenUsageFormatter.shared
 
     var body: some View {
-        let items = formatter.breakdown(for: totals)
+        let items = formatter.breakdown(for: usage)
         VStack(alignment: .leading, spacing: 6) {
             Text("Today")
                 .font(.headline)
