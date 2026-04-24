@@ -36,6 +36,14 @@ If you need cross-verification, run ccusage against the same log tree—the tota
 1. Set versions in Xcode: `MARKETING_VERSION` (e.g., `1.0`) and `CURRENT_PROJECT_VERSION` (build number).  
 2. Ensure Sparkle keys are set in build settings (`SUFeedURL`, `SUPublicEDKey`).  
 3. Archive and export with **Developer ID** signing (Xcode → Product → Archive → Distribute App → Developer ID).  
+4. Create the DMG, notarize/staple it, and sign it for Sparkle:
+   ```bash
+   scripts/release-dmg.sh
+   ```
+   Defaults: `~/Downloads/Tokage.app`, Sparkle in `~/Downloads/Sparkle` or `~/Downloads/Sparkle-for-Swift-Package-Manager`, Sparkle Keychain account `ed25519`, and notary profile `AC_PROFILE`. Use `scripts/release-dmg.sh --help` for overrides.
+
+Manual equivalent for steps 4-6:
+
 4. Create a DMG:
    ```bash
    scripts/create-dmg.sh /path/to/Exported/Tokage.app

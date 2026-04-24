@@ -86,6 +86,11 @@
     "gpt-5.4-pro": {
       "input": 30.0,
       "output": 180.0
+    },
+    "gpt-5.5": {
+      "input": 5.0,
+      "cachedInput": 0.5,
+      "output": 30.0
     }
   },
   "aliases": {

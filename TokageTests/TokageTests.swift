@@ -42,7 +42,8 @@ struct TokageTests {
         models: [
             "gpt-5.1-codex": ModelRates(input: 1.25, cachedInput: 0.125, output: 10.0),
             "gpt-5.3-codex": ModelRates(input: 1.75, cachedInput: 0.175, output: 14.0),
-            "gpt-5.4": ModelRates(input: 2.5, cachedInput: 0.25, output: 15.0)
+            "gpt-5.4": ModelRates(input: 2.5, cachedInput: 0.25, output: 15.0),
+            "gpt-5.5": ModelRates(input: 5.0, cachedInput: 0.5, output: 30.0)
         ],
         aliases: [
             "gpt-5.1-codex-max": "gpt-5.1-codex",
@@ -228,6 +229,23 @@ struct TokageTests {
 
         let dailyUsage = try service.fetchDailyUsage(for: date(year: 2026, month: 2, day: 22))
         #expect(isApproximatelyEqual(dailyUsage[0].costs.totalCost, 2.1875))
+    }
+
+    @Test func gpt55PricingUsesCatalogRates() throws {
+        let usage = FixtureTotals(inputTokens: 1_000_000, cachedInputTokens: 500_000, outputTokens: 100_000, reasoningOutputTokens: 50_000, totalTokens: 1_100_000)
+
+        let fileContents = try [
+            "2026/02/22/session-a.jsonl": buildLog(events: [
+                makeTurnContextEvent(timestamp: "2026-02-22T07:00:00.000Z", model: "gpt-5.5"),
+                makeTokenCountEvent(timestamp: "2026-02-22T07:00:01.000Z", total: usage, last: usage)
+            ])
+        ]
+
+        let (service, rootURL) = try makeService(logsByPath: fileContents)
+        defer { try? FileManager.default.removeItem(at: rootURL) }
+
+        let dailyUsage = try service.fetchDailyUsage(for: date(year: 2026, month: 2, day: 22))
+        #expect(isApproximatelyEqual(dailyUsage[0].costs.totalCost, 7.25))
     }
 
     @Test func monthlyTotalsUseModelSpecificRatesAcrossFiles() throws {
