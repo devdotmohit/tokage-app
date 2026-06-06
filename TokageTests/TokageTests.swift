@@ -158,6 +158,26 @@ struct TokageTests {
         #expect(usage[0].totals == inDay.tokenTotals)
     }
 
+    @Test func dailyTotalsFilterOutNextDayEventsFromTargetDayDirectory() throws {
+        let targetDayUsage = FixtureTotals(inputTokens: 90, cachedInputTokens: 30, outputTokens: 10, reasoningOutputTokens: 4, totalTokens: 100)
+        let nextDayUsage = FixtureTotals(inputTokens: 900, cachedInputTokens: 300, outputTokens: 100, reasoningOutputTokens: 40, totalTokens: 1000)
+
+        let fileContents = try [
+            "2026/02/22/session-a.jsonl": buildLog(events: [
+                makeTokenCountEvent(timestamp: "2026-02-22T23:59:58.000Z", total: targetDayUsage, last: targetDayUsage),
+                makeTokenCountEvent(timestamp: "2026-02-23T00:00:02.000Z", total: nextDayUsage, last: nextDayUsage)
+            ])
+        ]
+
+        let (service, rootURL) = try makeService(logsByPath: fileContents)
+        defer { try? FileManager.default.removeItem(at: rootURL) }
+
+        let usage = try service.fetchDailyUsage(for: date(year: 2026, month: 2, day: 22))
+
+        #expect(usage.count == 1)
+        #expect(usage[0].totals == targetDayUsage.tokenTotals)
+    }
+
     @Test func dailyTotalsIgnoreForkedSubagentLogs() throws {
         let parentUsage = FixtureTotals(inputTokens: 100, cachedInputTokens: 20, outputTokens: 10, reasoningOutputTokens: 5, totalTokens: 110)
         let childDelta = FixtureTotals(inputTokens: 60, cachedInputTokens: 10, outputTokens: 8, reasoningOutputTokens: 2, totalTokens: 68)

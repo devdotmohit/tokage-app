@@ -539,7 +539,7 @@ final class TokenUsageService {
         if let dayDirectory = dayDirectory(for: key, rootURL: rootURL) {
             let files = jsonlFiles(at: dayDirectory)
             for file in files {
-                descriptors[file] = false
+                descriptors[file] = true
             }
         }
 
