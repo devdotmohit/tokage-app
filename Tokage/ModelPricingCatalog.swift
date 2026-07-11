@@ -4,9 +4,42 @@ struct ModelRates: Decodable, Equatable {
     let input: Double
     let cachedInput: Double?
     let output: Double
+    let longContextThreshold: Int?
+    let longContextInputMultiplier: Double?
+    let longContextOutputMultiplier: Double?
+
+    init(
+        input: Double,
+        cachedInput: Double? = nil,
+        output: Double,
+        longContextThreshold: Int? = nil,
+        longContextInputMultiplier: Double? = nil,
+        longContextOutputMultiplier: Double? = nil
+    ) {
+        self.input = input
+        self.cachedInput = cachedInput
+        self.output = output
+        self.longContextThreshold = longContextThreshold
+        self.longContextInputMultiplier = longContextInputMultiplier
+        self.longContextOutputMultiplier = longContextOutputMultiplier
+    }
 
     var cachedInputRate: Double {
         cachedInput ?? input
+    }
+
+    func effectiveRates(forInputTokens inputTokens: Int) -> (input: Double, cachedInput: Double, output: Double) {
+        guard let longContextThreshold, inputTokens > longContextThreshold else {
+            return (input, cachedInputRate, output)
+        }
+
+        let inputMultiplier = longContextInputMultiplier ?? 1
+        let outputMultiplier = longContextOutputMultiplier ?? 1
+        return (
+            input * inputMultiplier,
+            cachedInputRate * inputMultiplier,
+            output * outputMultiplier
+        )
     }
 }
 

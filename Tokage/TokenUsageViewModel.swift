@@ -325,8 +325,7 @@ extension TokenUsageViewModel {
             costs: CostTotals(
                 inputCost: max(current.costs.inputCost - previous.costs.inputCost, 0),
                 cachedInputCost: max(current.costs.cachedInputCost - previous.costs.cachedInputCost, 0),
-                outputCost: max(current.costs.outputCost - previous.costs.outputCost, 0),
-                reasoningCost: max(current.costs.reasoningCost - previous.costs.reasoningCost, 0)
+                outputCost: max(current.costs.outputCost - previous.costs.outputCost, 0)
             )
         )
     }

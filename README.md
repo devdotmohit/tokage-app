@@ -5,11 +5,12 @@ Tokage is a lightweight macOS menu‑bar utility that tallies your Codex JSONL s
 ## Features
 
 - **Menu‑bar first**: Runs headless with a Menu Bar Extra on macOS 13+, showing today’s usage, quick refresh, and a Quit action.  
-- **Daily focus**: Reads JSONL session logs under `~/.codex/sessions/YYYY/MM/DD` and counts any token events found there without re-checking timestamps (trusts local folder structure).  
+- **Daily focus**: Reads Codex JSONL session logs and attributes token events by their ISO timestamps; folders are only discovery hints.  
 - **Historical rollup**: Caches the previous six days (yesterday + five more) and a calendar-month summary, refreshing only the missing days to reduce disk churn.  
-- **Model-aware pricing**: Reads `turn_context` model ids and applies bundled GPT-5 family pricing, with a generic fallback for unknown models.  
-- **Cost breakdown**: Mirrors ccusage logic for billable vs cached input, output, and reasoning tokens; reasoning is billed at the active model’s output rate.  
-- **Safe fallback**: If a day folder is empty we fall back to month-level logs while filtering by timestamp, so misfiled entries still count correctly.
+- **Model-aware pricing**: Reads `turn_context` model ids and applies bundled GPT-5 family pricing, including GPT-5.6 Sol, Terra, and Luna, with a generic fallback for unknown models.  
+- **Cost breakdown**: Estimates API-equivalent billable input, cached input, and output costs; reasoning tokens are already included in output and are not billed twice.  
+- **Long-context pricing**: Applies published per-request input and output multipliers when a supported model exceeds 272,000 input tokens.  
+- **Safe fallback**: Recently modified older rollout files are scanned and cached, so long-running Codex goals/tasks count on the day their token events happened without a full root scan on every refresh.
 
 ## Usage
 
@@ -22,13 +23,14 @@ Tokage is a lightweight macOS menu‑bar utility that tallies your Codex JSONL s
 ## Implementation Notes
 
 - Daily aggregation uses incremental `FileState` offsets; we only parse new lines per file.  
+- File discovery checks target folders every refresh, keeps cached active older files, and throttles full `~/.codex/sessions` sweeps to reduce repeated filesystem work.  
 - Historical cache keys are ISO day strings; month cache keys are `YYYY-MM`.  
 - When totals change for today we adjust the cached month by computing the delta.  
-- ISO timestamps are still parsed to guard against misfiled entries when not in the day path.
+- ISO timestamps are the source of truth for day/month attribution because long-running Codex goals can append later events to older rollout files.
 
 ## Matching ccusage
 
-The logic mirrors ccusage’s token normalization (`cache_read_input_tokens` fallback, reasoning included in output, etc.).  
+The logic mirrors ccusage’s token normalization (`cache_read_input_tokens` fallback, reasoning included in output, etc.). Dollar values are API-equivalent estimates rather than Codex subscription invoices. GPT-5.6 cache-write premiums are not included because Codex session logs do not expose cache-write token counts.  
 If you need cross-verification, run ccusage against the same log tree—the totals should align within rounding.
 
 ## Release (Sparkle + DMG)

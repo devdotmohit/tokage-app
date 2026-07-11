@@ -102,7 +102,7 @@ struct TokenTotals: Decodable, Equatable, Hashable {
     }
 
     var billingTokenTotal: Int {
-        billedInputTokens + cachedInputTokens + outputTokens + reasoningOutputTokens
+        max(inputTokens, 0) + max(outputTokens, 0)
     }
 
     func normalized() -> TokenTotals {
@@ -132,28 +132,26 @@ struct CostTotals: Equatable, Hashable {
     let inputCost: Double
     let cachedInputCost: Double
     let outputCost: Double
-    let reasoningCost: Double
 
-    init(inputCost: Double, cachedInputCost: Double, outputCost: Double, reasoningCost: Double) {
+    init(inputCost: Double, cachedInputCost: Double, outputCost: Double) {
         self.inputCost = inputCost
         self.cachedInputCost = cachedInputCost
         self.outputCost = outputCost
-        self.reasoningCost = reasoningCost
     }
 
     init(totals: TokenTotals, rates: ModelRates) {
+        let effectiveRates = rates.effectiveRates(forInputTokens: totals.inputTokens)
         self.init(
-            inputCost: CostTotals.cost(tokens: totals.billedInputTokens, rate: rates.input),
-            cachedInputCost: CostTotals.cost(tokens: totals.cachedInputTokens, rate: rates.cachedInputRate),
-            outputCost: CostTotals.cost(tokens: totals.outputTokens, rate: rates.output),
-            reasoningCost: CostTotals.cost(tokens: totals.reasoningOutputTokens, rate: rates.output)
+            inputCost: CostTotals.cost(tokens: totals.billedInputTokens, rate: effectiveRates.input),
+            cachedInputCost: CostTotals.cost(tokens: totals.cachedInputTokens, rate: effectiveRates.cachedInput),
+            outputCost: CostTotals.cost(tokens: totals.outputTokens, rate: effectiveRates.output)
         )
     }
 
-    static let zero = CostTotals(inputCost: 0, cachedInputCost: 0, outputCost: 0, reasoningCost: 0)
+    static let zero = CostTotals(inputCost: 0, cachedInputCost: 0, outputCost: 0)
 
     var totalCost: Double {
-        inputCost + cachedInputCost + outputCost + reasoningCost
+        inputCost + cachedInputCost + outputCost
     }
 
     var isZero: Bool {
@@ -164,8 +162,7 @@ struct CostTotals: Equatable, Hashable {
         CostTotals(
             inputCost: inputCost + other.inputCost,
             cachedInputCost: cachedInputCost + other.cachedInputCost,
-            outputCost: outputCost + other.outputCost,
-            reasoningCost: reasoningCost + other.reasoningCost
+            outputCost: outputCost + other.outputCost
         )
     }
 
@@ -233,10 +230,20 @@ enum TokenUsageError: LocalizedError {
 }
 
 final class TokenUsageService {
-    private struct CacheKey: Equatable {
+    private struct CacheKey: Hashable {
         let year: Int
         let month: Int
         let day: Int
+    }
+
+    private struct MonthCacheKey: Hashable {
+        let year: Int
+        let month: Int
+    }
+
+    private struct DiscoveryState {
+        var cachedFiles: Set<URL> = []
+        var lastRootScanAt: Date?
     }
 
     private struct FileState {
@@ -316,15 +323,12 @@ final class TokenUsageService {
         }
     }
 
-    private struct FileDescriptor {
-        let url: URL
-        let enforceTimestamp: Bool
-    }
-
     private let fileManager: FileManager
     private let calendar: Calendar
     private let sessionsRootURL: URL?
     private let pricingCatalog: ModelPricingCatalog
+    private let rootScanInterval: TimeInterval
+    private let currentDate: () -> Date
     private let decoder = JSONDecoder()
     private let isoFormatter: ISO8601DateFormatter
     private lazy var dayFormatter: DateFormatter = {
@@ -338,17 +342,23 @@ final class TokenUsageService {
     private var fileStates: [URL: FileState] = [:]
     private var cachedUsage: [DailyTokenUsage]?
     private var cacheDirty = true
+    private var dailyDiscoveryStates: [CacheKey: DiscoveryState] = [:]
+    private var monthlyDiscoveryStates: [MonthCacheKey: DiscoveryState] = [:]
 
     init(
         fileManager: FileManager = .default,
         calendar: Calendar = .current,
         sessionsRootURL: URL? = nil,
-        pricingCatalog: ModelPricingCatalog = ModelPricingCatalog.load()
+        pricingCatalog: ModelPricingCatalog = ModelPricingCatalog.load(),
+        rootScanInterval: TimeInterval = 30 * 60,
+        currentDate: @escaping () -> Date = Date.init
     ) {
         self.fileManager = fileManager
         self.calendar = calendar
         self.sessionsRootURL = sessionsRootURL
         self.pricingCatalog = pricingCatalog
+        self.rootScanInterval = rootScanInterval
+        self.currentDate = currentDate
         self.isoFormatter = ISO8601DateFormatter()
         self.isoFormatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
     }
@@ -365,8 +375,7 @@ final class TokenUsageService {
             resetCache(for: key)
         }
 
-        let fileDescriptors = discoverLogFiles(for: key, rootURL: rootURL)
-        let logFiles = fileDescriptors.map(\.url)
+        let logFiles = discoverLogFiles(for: key, rootURL: rootURL)
 
         if logFiles.isEmpty {
             cachedUsage = nil
@@ -380,14 +389,12 @@ final class TokenUsageService {
             preconditionFailure("Unable to derive target day for components \(key)")
         }
 
-        for descriptor in fileDescriptors {
-            let url = descriptor.url
+        for url in logFiles {
             let previousState = fileStates[url]
             let (updatedState, changed) = processFile(
                 at: url,
                 previousState: previousState,
-                targetDay: targetDay,
-                enforceTimestamp: descriptor.enforceTimestamp
+                targetDay: targetDay
             )
             fileStates[url] = updatedState
             if changed {
@@ -413,17 +420,14 @@ final class TokenUsageService {
             throw TokenUsageError.missingSessionsDirectory
         }
 
-        guard let monthDirectory = monthDirectory(for: key, rootURL: rootURL) else {
-            throw TokenUsageError.missingMonthDirectory
-        }
-
-        guard let enumerator = fileManager.enumerator(at: monthDirectory, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles]) else {
+        let logFiles = discoverMonthlyLogFiles(for: key, rootURL: rootURL)
+        if logFiles.isEmpty {
             throw TokenUsageError.missingMonthDirectory
         }
 
         var monthAggregate: UsageAggregate = .zero
 
-        for case let fileURL as URL in enumerator where fileURL.pathExtension == "jsonl" {
+        for fileURL in logFiles {
             var previousTotals: TokenTotals?
             var lastUsageSignature: UsageSignature?
             var lastModel: String?
@@ -466,8 +470,7 @@ final class TokenUsageService {
                 }
 
                 guard let timestamp = event.timestamp,
-                      let eventDate = isoFormatter.date(from: timestamp),
-                      calendar.isDate(eventDate, equalTo: date, toGranularity: .month) else {
+                      let eventDate = isoFormatter.date(from: timestamp) else {
                     continue
                 }
 
@@ -505,6 +508,10 @@ final class TokenUsageService {
                     continue
                 }
 
+                if calendar.isDate(eventDate, equalTo: date, toGranularity: .month) == false {
+                    continue
+                }
+
                 let normalizedDelta = deltaTotals.normalized()
                 guard normalizedDelta.isZero == false else {
                     continue
@@ -532,37 +539,85 @@ final class TokenUsageService {
         cacheDirty = true
     }
 
-    private func discoverLogFiles(for key: CacheKey, rootURL: URL) -> [FileDescriptor] {
-        let dayComponent = String(format: "%02d", key.day)
-        var descriptors: [URL: Bool] = [:]
+    private func discoverLogFiles(for key: CacheKey, rootURL: URL) -> [URL] {
+        guard let targetDay = targetDay(for: key) else {
+            return []
+        }
+
+        var files = Set<URL>()
+        var discoveryState = dailyDiscoveryStates[key] ?? DiscoveryState()
+        pruneMissingCachedFiles(in: &discoveryState)
 
         if let dayDirectory = dayDirectory(for: key, rootURL: rootURL) {
-            let files = jsonlFiles(at: dayDirectory)
-            for file in files {
-                descriptors[file] = false
-            }
+            files.formUnion(jsonlFiles(at: dayDirectory))
         }
 
         if let monthDirectory = monthDirectory(for: key, rootURL: rootURL) {
-            let monthFiles = jsonlFiles(at: monthDirectory)
-            for file in monthFiles where descriptors[file] == nil {
-                let relativeComponents = file.pathComponents.dropFirst(monthDirectory.pathComponents.count)
-                let firstRelativeComponent = relativeComponents.first
-                let enforce = firstRelativeComponent != dayComponent
-                descriptors[file] = enforce
-            }
+            files.formUnion(jsonlFiles(at: monthDirectory))
         }
 
-        if descriptors.isEmpty {
-            let fallbackFiles = jsonlFiles(at: rootURL)
-            for file in fallbackFiles {
-                descriptors[file] = true
-            }
+        files.formUnion(discoveryState.cachedFiles)
+
+        let now = currentDate()
+        if shouldScanRoot(lastScannedAt: discoveryState.lastRootScanAt, now: now) {
+            let modifiedFiles = Set(jsonlFilesModified(since: targetDay, at: rootURL))
+            discoveryState.cachedFiles.formUnion(modifiedFiles)
+            discoveryState.lastRootScanAt = now
+            files.formUnion(modifiedFiles)
         }
 
-        return descriptors
-            .map { FileDescriptor(url: $0.key, enforceTimestamp: $0.value) }
-            .sorted { $0.url.path < $1.url.path }
+        if files.isEmpty {
+            let fallbackFiles = Set(jsonlFiles(at: rootURL))
+            discoveryState.cachedFiles.formUnion(fallbackFiles)
+            discoveryState.lastRootScanAt = now
+            files.formUnion(fallbackFiles)
+        }
+
+        dailyDiscoveryStates[key] = discoveryState
+        return files.sorted { $0.path < $1.path }
+    }
+
+    private func discoverMonthlyLogFiles(for key: CacheKey, rootURL: URL) -> [URL] {
+        let monthKey = makeMonthCacheKey(for: key)
+        var files = Set<URL>()
+        var discoveryState = monthlyDiscoveryStates[monthKey] ?? DiscoveryState()
+        pruneMissingCachedFiles(in: &discoveryState)
+
+        if let monthDirectory = monthDirectory(for: key, rootURL: rootURL) {
+            files.formUnion(jsonlFiles(at: monthDirectory))
+        }
+
+        files.formUnion(discoveryState.cachedFiles)
+
+        let now = currentDate()
+        if let monthStart = targetMonthStart(for: key),
+           shouldScanRoot(lastScannedAt: discoveryState.lastRootScanAt, now: now) {
+            let modifiedFiles = Set(jsonlFilesModified(since: monthStart, at: rootURL))
+            discoveryState.cachedFiles.formUnion(modifiedFiles)
+            discoveryState.lastRootScanAt = now
+            files.formUnion(modifiedFiles)
+        }
+
+        monthlyDiscoveryStates[monthKey] = discoveryState
+        return files.sorted { $0.path < $1.path }
+    }
+
+    private func makeMonthCacheKey(for key: CacheKey) -> MonthCacheKey {
+        MonthCacheKey(year: key.year, month: key.month)
+    }
+
+    private func shouldScanRoot(lastScannedAt: Date?, now: Date) -> Bool {
+        guard let lastScannedAt else {
+            return true
+        }
+
+        return now.timeIntervalSince(lastScannedAt) >= rootScanInterval
+    }
+
+    private func pruneMissingCachedFiles(in discoveryState: inout DiscoveryState) {
+        discoveryState.cachedFiles = discoveryState.cachedFiles.filter {
+            fileManager.fileExists(atPath: $0.path)
+        }
     }
 
     private func dayDirectory(for key: CacheKey, rootURL: URL) -> URL? {
@@ -590,6 +645,29 @@ final class TokenUsageService {
         return results
     }
 
+    private func jsonlFilesModified(since startDate: Date, at directory: URL) -> [URL] {
+        guard let enumerator = fileManager.enumerator(
+            at: directory,
+            includingPropertiesForKeys: [.contentModificationDateKey],
+            options: [.skipsHiddenFiles]
+        ) else {
+            return []
+        }
+
+        var results: [URL] = []
+        for case let fileURL as URL in enumerator where fileURL.pathExtension == "jsonl" {
+            guard let values = try? fileURL.resourceValues(forKeys: [.contentModificationDateKey]),
+                  let modifiedAt = values.contentModificationDate else {
+                continue
+            }
+
+            if modifiedAt >= startDate {
+                results.append(fileURL)
+            }
+        }
+        return results
+    }
+
     private func pruneMissingFiles(presentFiles: [URL]) {
         let presentSet = Set(presentFiles)
         let removed = fileStates.keys.filter { presentSet.contains($0) == false }
@@ -604,11 +682,14 @@ final class TokenUsageService {
         calendar.date(from: DateComponents(year: key.year, month: key.month, day: key.day))
     }
 
+    private func targetMonthStart(for key: CacheKey) -> Date? {
+        calendar.date(from: DateComponents(year: key.year, month: key.month, day: 1))
+    }
+
     private func processFile(
         at url: URL,
         previousState: FileState?,
-        targetDay: Date,
-        enforceTimestamp: Bool
+        targetDay: Date
     ) -> (FileState, Bool) {
         var state = previousState ?? FileState()
         var changed = false
@@ -736,7 +817,7 @@ final class TokenUsageService {
                 continue
             }
 
-            if enforceTimestamp, calendar.isDate(eventDate, inSameDayAs: targetDay) == false {
+            if calendar.isDate(eventDate, inSameDayAs: targetDay) == false {
                 continue
             }
 

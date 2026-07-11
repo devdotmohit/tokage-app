@@ -6,7 +6,6 @@ struct TokenUsageFormatter {
             case input
             case cached
             case output
-            case reasoning
         }
 
         let kind: Kind
@@ -24,8 +23,6 @@ struct TokenUsageFormatter {
                 return "internaldrive"
             case .output:
                 return "arrow.up.right"
-            case .reasoning:
-                return "brain.head.profile"
             }
         }
     }
@@ -64,12 +61,6 @@ struct TokenUsageFormatter {
                 label: "Output",
                 tokensText: formatTokens(totals.outputTokens),
                 costText: formatCurrency(for: costs.outputCost)
-            ),
-            TokenBreakdown(
-                kind: .reasoning,
-                label: "Reasoning",
-                tokensText: formatTokens(totals.reasoningOutputTokens),
-                costText: formatCurrency(for: costs.reasoningCost)
             )
         ]
     }

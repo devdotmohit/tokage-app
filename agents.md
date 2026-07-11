@@ -4,9 +4,10 @@ This document summarizes the operational choices implemented in the Tokage menuâ
 
 ## File Discovery
 
-- Primary source: `~/.codex/sessions/YYYY/MM/DD` directory for the target day.  
-- Secondary: month directory (`~/.codex/sessions/YYYY/MM`) picking files whose path contains the day component.  
-- Fallback: entire month tree, or last resort the sessions root; events from these fallbacks are filtered by timestamp to stay day-correct.
+- Primary discovery: `~/.codex/sessions/YYYY/MM/DD` directory for the target day.  
+- Secondary discovery: the target month directory and cached recently modified session files under the sessions root.  
+- Full sessions-root sweeps are throttled; target day/month folders are still checked every refresh.  
+- Attribution source of truth: event ISO timestamps, not folder paths. Long-running Codex goals can append later events to older rollout files.
 
 ## Token Parsing
 
@@ -16,6 +17,13 @@ This document summarizes the operational choices implemented in the Tokage menuâ
   - Input minus cached gives billable input; total falls back to input + output when missing.  
   - Reasoning tokens are clamped not to exceed output tokens.  
 - Deltas: prefer `last_token_usage`; otherwise subtract cumulative totals from previous event (with negative guard).
+
+## Pricing
+
+- Resolve each `turn_context` model through the bundled catalog; unknown models use the generic fallback.  
+- Reasoning is a subset of output, so output tokens and costs are counted once.  
+- Supported GPT-5.4+ models apply 2x input/cached-input and 1.5x output rates when a single usage event exceeds 272,000 input tokens.  
+- Dollar values are API-equivalent estimates. GPT-5.6 cache-write premiums are excluded because JSONL token events do not expose cache-write counts.  
 
 ## Deduplication
 
@@ -37,6 +45,6 @@ This document summarizes the operational choices implemented in the Tokage menuâ
 
 ## Gotchas
 
-- When a day folder exists we trust it and skip timestamp gating; logs mis-timestamped but placed in the folder still count.  
-- If only month-level files exist we fall back to timestamp filtering to keep days accurate.  
+- Folder dates are discovery hints only; all counted token events must match the requested day/month by timestamp.  
+- Recently modified older session files are cached so active long-running goals are not missed between throttled root sweeps.  
 - Monthly totals can be heavy if the tree is large; consider batching or streaming if performance regresses.

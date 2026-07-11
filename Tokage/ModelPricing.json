@@ -81,20 +81,54 @@
     "gpt-5.4": {
       "input": 2.5,
       "cachedInput": 0.25,
-      "output": 15.0
+      "output": 15.0,
+      "longContextThreshold": 272000,
+      "longContextInputMultiplier": 2.0,
+      "longContextOutputMultiplier": 1.5
     },
     "gpt-5.4-pro": {
       "input": 30.0,
-      "output": 180.0
+      "output": 180.0,
+      "longContextThreshold": 272000,
+      "longContextInputMultiplier": 2.0,
+      "longContextOutputMultiplier": 1.5
     },
     "gpt-5.5": {
       "input": 5.0,
       "cachedInput": 0.5,
-      "output": 30.0
+      "output": 30.0,
+      "longContextThreshold": 272000,
+      "longContextInputMultiplier": 2.0,
+      "longContextOutputMultiplier": 1.5
+    },
+    "gpt-5.6-sol": {
+      "input": 5.0,
+      "cachedInput": 0.5,
+      "output": 30.0,
+      "longContextThreshold": 272000,
+      "longContextInputMultiplier": 2.0,
+      "longContextOutputMultiplier": 1.5
+    },
+    "gpt-5.6-terra": {
+      "input": 2.5,
+      "cachedInput": 0.25,
+      "output": 15.0,
+      "longContextThreshold": 272000,
+      "longContextInputMultiplier": 2.0,
+      "longContextOutputMultiplier": 1.5
+    },
+    "gpt-5.6-luna": {
+      "input": 1.0,
+      "cachedInput": 0.1,
+      "output": 6.0,
+      "longContextThreshold": 272000,
+      "longContextInputMultiplier": 2.0,
+      "longContextOutputMultiplier": 1.5
     }
   },
   "aliases": {
     "gpt-5.1-codex-max": "gpt-5.1-codex",
-    "gpt-5.3-codex-spark": "gpt-5.3-codex"
+    "gpt-5.3-codex-spark": "gpt-5.3-codex",
+    "gpt-5.6": "gpt-5.6-sol"
   }
 }
