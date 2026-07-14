@@ -49,9 +49,11 @@ Manual equivalent for steps 4-6:
 4. Create a DMG:
    ```bash
    scripts/create-dmg.sh /path/to/Exported/Tokage.app
+   scripts/create-dmg.sh ~/Downloads/Tokage/Tokage.app
    ```
 5. Notarize and staple the DMG:
    ```bash
+   xcrun notarytool submit ~/Downloads/Tokage/Tokage.app --keychain-profile "AC_PROFILE" --wait
    xcrun notarytool submit dist/Tokage.dmg --keychain-profile "AC_PROFILE" --wait
    xcrun stapler staple dist/Tokage.dmg
    ```
