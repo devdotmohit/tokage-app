@@ -53,12 +53,12 @@ Manual equivalent for steps 4-6:
    ```
 5. Notarize and staple the DMG:
    ```bash
-   xcrun notarytool submit ~/Downloads/Tokage/Tokage.app --keychain-profile "AC_PROFILE" --wait
    xcrun notarytool submit dist/Tokage.dmg --keychain-profile "AC_PROFILE" --wait
    xcrun stapler staple dist/Tokage.dmg
    ```
 6. Sign the DMG for Sparkle (from the Sparkle release bundle):
    ```bash
+   /path/to/Sparkle/bin/sign_update --ed-key-file /path/to/private_key.pem dist/Tokage.dmg
    /path/to/Sparkle/bin/sign_update --ed-key-file /path/to/private_key.pem dist/Tokage.dmg
    ```
 7. Update `appcast.xml` with `sparkle:version`, `sparkle:shortVersionString`, `sparkle:edSignature`, and `length`, then upload the DMG + appcast to `SUFeedURL`.
