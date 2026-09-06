@@ -320,7 +320,8 @@ extension TokenUsageViewModel {
                 cachedInputTokens: max(current.totals.cachedInputTokens - previous.totals.cachedInputTokens, 0),
                 outputTokens: max(current.totals.outputTokens - previous.totals.outputTokens, 0),
                 reasoningOutputTokens: max(current.totals.reasoningOutputTokens - previous.totals.reasoningOutputTokens, 0),
-                totalTokens: max(current.totals.totalTokens - previous.totals.totalTokens, 0)
+                totalTokens: max(current.totals.totalTokens - previous.totals.totalTokens, 0),
+                cacheWriteInputTokens: max(current.totals.cacheWriteInputTokens - previous.totals.cacheWriteInputTokens, 0)
             ),
             costs: CostTotals(
                 inputCost: max(current.costs.inputCost - previous.costs.inputCost, 0),

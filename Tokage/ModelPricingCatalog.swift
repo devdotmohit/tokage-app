@@ -3,6 +3,7 @@ import Foundation
 struct ModelRates: Decodable, Equatable {
     let input: Double
     let cachedInput: Double?
+    let cacheWriteInput: Double?
     let output: Double
     let longContextThreshold: Int?
     let longContextInputMultiplier: Double?
@@ -12,12 +13,14 @@ struct ModelRates: Decodable, Equatable {
         input: Double,
         cachedInput: Double? = nil,
         output: Double,
+        cacheWriteInput: Double? = nil,
         longContextThreshold: Int? = nil,
         longContextInputMultiplier: Double? = nil,
         longContextOutputMultiplier: Double? = nil
     ) {
         self.input = input
         self.cachedInput = cachedInput
+        self.cacheWriteInput = cacheWriteInput
         self.output = output
         self.longContextThreshold = longContextThreshold
         self.longContextInputMultiplier = longContextInputMultiplier
@@ -28,9 +31,13 @@ struct ModelRates: Decodable, Equatable {
         cachedInput ?? input
     }
 
-    func effectiveRates(forInputTokens inputTokens: Int) -> (input: Double, cachedInput: Double, output: Double) {
+    var cacheWriteInputRate: Double {
+        cacheWriteInput ?? input
+    }
+
+    func effectiveRates(forInputTokens inputTokens: Int) -> (input: Double, cachedInput: Double, cacheWriteInput: Double, output: Double) {
         guard let longContextThreshold, inputTokens > longContextThreshold else {
-            return (input, cachedInputRate, output)
+            return (input, cachedInputRate, cacheWriteInputRate, output)
         }
 
         let inputMultiplier = longContextInputMultiplier ?? 1
@@ -38,6 +45,7 @@ struct ModelRates: Decodable, Equatable {
         return (
             input * inputMultiplier,
             cachedInputRate * inputMultiplier,
+            cacheWriteInputRate * inputMultiplier,
             output * outputMultiplier
         )
     }

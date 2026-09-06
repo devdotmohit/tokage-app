@@ -7,7 +7,7 @@ Tokage is a lightweight macOS menu‑bar utility that tallies your Codex JSONL s
 - **Menu‑bar first**: Runs headless with a Menu Bar Extra on macOS 13+, showing today’s usage, quick refresh, and a Quit action.  
 - **Daily focus**: Reads Codex JSONL session logs and attributes token events by their ISO timestamps; folders are only discovery hints.  
 - **Historical rollup**: Caches the previous six days (yesterday + five more) and a calendar-month summary, refreshing only the missing days to reduce disk churn.  
-- **Model-aware pricing**: Reads `turn_context` model ids and applies bundled GPT-5 family pricing, including GPT-5.6 Sol, Terra, and Luna, with a generic fallback for unknown models.  
+- **Model-aware pricing**: Reads `turn_context` model ids and applies bundled GPT-6 Astra and GPT-5 family pricing, including GPT-5.6 Sol, Terra, and Luna, with a generic fallback for unknown models.
 - **Cost breakdown**: Estimates API-equivalent billable input, cached input, and output costs; reasoning tokens are already included in output and are not billed twice.  
 - **Long-context pricing**: Applies published per-request input and output multipliers when a supported model exceeds 272,000 input tokens.  
 - **Safe fallback**: Recently modified older rollout files are scanned and cached, so long-running Codex goals/tasks count on the day their token events happened without a full root scan on every refresh.
@@ -30,8 +30,21 @@ Tokage is a lightweight macOS menu‑bar utility that tallies your Codex JSONL s
 
 ## Matching ccusage
 
-The logic mirrors ccusage’s token normalization (`cache_read_input_tokens` fallback, reasoning included in output, etc.). Dollar values are API-equivalent estimates rather than Codex subscription invoices. GPT-5.6 cache-write premiums are not included because Codex session logs do not expose cache-write token counts.  
+The logic mirrors ccusage’s token normalization (`cache_read_input_tokens` fallback, reasoning included in output, etc.). Dollar values are API-equivalent estimates rather than Codex subscription invoices. Astra and GPT-5.6 cache-write premiums are included when session logs provide `cache_write_input_tokens`; older logs default that count to zero.
 If you need cross-verification, run ccusage against the same log tree—the totals should align within rounding.
+
+## Pricing catalog
+
+`Tokage/ModelPricing.json` contains standard API USD rates per million tokens, verified against [OpenAI pricing](https://developers.openai.com/api/docs/pricing) on September 6, 2026:
+
+| Model | Input | Cached input | Cache writes | Output |
+| --- | ---: | ---: | ---: | ---: |
+| GPT-6 Astra | $10 | $1 | $12.50 | $50 |
+| GPT-5.6 Sol | $4 | $0.40 | $5 | $20 |
+| GPT-5.6 Terra | $2 | $0.20 | $2.50 | $12 |
+| GPT-5.6 Luna | $0.20 | $0.02 | $0.25 | $1.20 |
+
+Cache writes are part of uncached input and replace the normal input rate for those tokens. Above 272,000 input tokens per request, these models use 2x input/cache rates and 1.5x output rates. The `gpt-5.6` alias uses Sol. Sol's promotional rates are available at least through November 21, 2026 and should be rechecked when pricing changes. Estimates exclude Fast/Priority or Flex adjustments, regional uplifts, and tool fees.
 
 ## Release (Sparkle + DMG)
 

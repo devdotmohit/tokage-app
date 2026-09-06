@@ -9,11 +9,13 @@ struct TokageTests {
         let outputTokens: Int
         let reasoningOutputTokens: Int
         let totalTokens: Int
+        var cacheWriteInputTokens: Int = 0
 
         var jsonObject: [String: Int] {
             [
                 "input_tokens": inputTokens,
                 "cached_input_tokens": cachedInputTokens,
+                "cache_write_input_tokens": cacheWriteInputTokens,
                 "output_tokens": outputTokens,
                 "reasoning_output_tokens": reasoningOutputTokens,
                 "total_tokens": totalTokens
@@ -26,7 +28,8 @@ struct TokageTests {
                 cachedInputTokens: cachedInputTokens,
                 outputTokens: outputTokens,
                 reasoningOutputTokens: reasoningOutputTokens,
-                totalTokens: totalTokens
+                totalTokens: totalTokens,
+                cacheWriteInputTokens: cacheWriteInputTokens
             )
         }
     }
@@ -37,42 +40,7 @@ struct TokageTests {
         return calendar
     }()
 
-    private static let pricingCatalog = ModelPricingCatalog(
-        defaultRates: ModelRates(input: 1.25, cachedInput: 0.125, output: 10.0),
-        models: [
-            "gpt-5.1-codex": ModelRates(input: 1.25, cachedInput: 0.125, output: 10.0),
-            "gpt-5.3-codex": ModelRates(input: 1.75, cachedInput: 0.175, output: 14.0),
-            "gpt-5.4": ModelRates(
-                input: 2.5,
-                cachedInput: 0.25,
-                output: 15.0,
-                longContextThreshold: 272_000,
-                longContextInputMultiplier: 2.0,
-                longContextOutputMultiplier: 1.5
-            ),
-            "gpt-5.5": ModelRates(
-                input: 5.0,
-                cachedInput: 0.5,
-                output: 30.0,
-                longContextThreshold: 272_000,
-                longContextInputMultiplier: 2.0,
-                longContextOutputMultiplier: 1.5
-            ),
-            "gpt-5.6-sol": ModelRates(
-                input: 5.0,
-                cachedInput: 0.5,
-                output: 30.0,
-                longContextThreshold: 272_000,
-                longContextInputMultiplier: 2.0,
-                longContextOutputMultiplier: 1.5
-            )
-        ],
-        aliases: [
-            "gpt-5.1-codex-max": "gpt-5.1-codex",
-            "gpt-5.3-codex-spark": "gpt-5.3-codex",
-            "gpt-5.6": "gpt-5.6-sol"
-        ]
-    )
+    private static let pricingCatalog = ModelPricingCatalog.load()
 
     @Test func duplicateUsagePayloadsAreCountedOnceForDailyTotals() throws {
         let first = FixtureTotals(inputTokens: 100, cachedInputTokens: 20, outputTokens: 10, reasoningOutputTokens: 5, totalTokens: 110)
@@ -437,27 +405,134 @@ struct TokageTests {
         #expect(isApproximatelyEqual(aggregate.costs.totalCost, 10.4))
     }
 
-    @Test func bundledCatalogIncludesGPT56FamilyAndAlias() {
+    @Test func bundledCatalogIncludesCurrentModelsAndAlias() {
         let catalog = ModelPricingCatalog.load()
         let sol = catalog.rates(for: "gpt-5.6-sol")
         let terra = catalog.rates(for: "gpt-5.6-terra")
         let luna = catalog.rates(for: "gpt-5.6-luna")
 
         #expect(sol == ModelRates(
-            input: 5.0,
-            cachedInput: 0.5,
-            output: 30.0,
+            input: 4.0,
+            cachedInput: 0.4,
+            output: 20.0,
+            cacheWriteInput: 5.0,
             longContextThreshold: 272_000,
             longContextInputMultiplier: 2.0,
             longContextOutputMultiplier: 1.5
         ))
-        #expect(terra.input == 2.5)
-        #expect(terra.cachedInput == 0.25)
-        #expect(terra.output == 15.0)
-        #expect(luna.input == 1.0)
-        #expect(luna.cachedInput == 0.1)
-        #expect(luna.output == 6.0)
+        #expect(terra.input == 2.0)
+        #expect(terra.cachedInput == 0.2)
+        #expect(terra.cacheWriteInput == 2.5)
+        #expect(terra.output == 12.0)
+        #expect(luna.input == 0.2)
+        #expect(luna.cachedInput == 0.02)
+        #expect(luna.cacheWriteInput == 0.25)
+        #expect(luna.output == 1.2)
         #expect(catalog.rates(for: "gpt-5.6") == sol)
+        #expect(catalog.rates(for: "gpt-6-astra") == ModelRates(
+            input: 10.0,
+            cachedInput: 1.0,
+            output: 50.0,
+            cacheWriteInput: 12.5,
+            longContextThreshold: 272_000,
+            longContextInputMultiplier: 2.0,
+            longContextOutputMultiplier: 1.5
+        ))
+    }
+
+    @Test func auditedAstraSnapshotAndModelSwitchUseBundledPricing() throws {
+        var events = try [makeTurnContextEvent(timestamp: "2026-09-06T10:00:00.000Z", model: "gpt-6-astra")]
+        var cumulative = TokenTotals.zero
+        // Preserve the audited totals across 100 requests below 272K input.
+        // Aggregated daily input must not trigger long-context pricing.
+        for index in 0..<100 {
+            let input = 70_219 + (index == 0 ? 37 : 0)
+            let output = 411 + (index == 0 ? 7 : 0)
+            let last = FixtureTotals(
+                inputTokens: input,
+                cachedInputTokens: 67_092 + (index == 0 ? 48 : 0),
+                outputTokens: output,
+                reasoningOutputTokens: 110 + (index == 0 ? 97 : 0),
+                totalTokens: input + output
+            )
+            cumulative = cumulative.adding(last.tokenTotals)
+            let total = FixtureTotals(
+                inputTokens: cumulative.inputTokens,
+                cachedInputTokens: cumulative.cachedInputTokens,
+                outputTokens: cumulative.outputTokens,
+                reasoningOutputTokens: cumulative.reasoningOutputTokens,
+                totalTokens: cumulative.totalTokens
+            )
+            events.append(try makeTokenCountEvent(
+                timestamp: String(format: "2026-09-06T10:%02d:%02d.000Z", index / 60, index % 60),
+                total: total, last: last
+            ))
+        }
+        let path = "2026/09/06/astra.jsonl"
+        let (service, rootURL) = try makeService(logsByPath: [path: buildLog(events: events)])
+        defer { try? FileManager.default.removeItem(at: rootURL) }
+        let today = date(year: 2026, month: 9, day: 6)
+        let usage = try #require(service.fetchDailyUsage(for: today).first?.aggregate)
+        #expect(usage.billingTokenTotal == 7_063_044)
+        #expect(isApproximatelyEqual(usage.costs.totalCost, 11.891488))
+        #expect(TokenUsageFormatter.shared.summary(usage: usage) == "7.06M • $11.89")
+        #expect(try service.fetchMonthlyTotals(for: today) == usage)
+        #expect(try service.fetchDailyUsage(for: today).first?.aggregate == usage)
+
+        let sol = FixtureTotals(inputTokens: 100_000, cachedInputTokens: 50_000, outputTokens: 10_000, reasoningOutputTokens: 5_000, totalTokens: 110_000)
+        try appendLog(events: [
+            makeTurnContextEvent(timestamp: "2026-09-06T11:00:00.000Z", model: "gpt-5.6"),
+            makeTokenCountEvent(timestamp: "2026-09-06T11:00:01.000Z", total: nil, last: sol)
+        ], to: rootURL.appendingPathComponent(path))
+        let updated = try #require(service.fetchDailyUsage(for: today).first?.aggregate)
+        #expect(updated.billingTokenTotal == 7_173_044)
+        #expect(isApproximatelyEqual(updated.costs.totalCost, 12.311488))
+        #expect(try service.fetchMonthlyTotals(for: today) == updated)
+    }
+
+    @Test(arguments: [
+        ("gpt-6-astra", 0.65, 2.575),
+        ("gpt-5.6-sol", 0.26, 1.03),
+        ("gpt-5.6-terra", 0.132, 0.518),
+        ("gpt-5.6-luna", 0.0132, 0.0518)
+    ])
+    func cacheWritesUsePublishedRates(model: String, standard: Double, longContext: Double) {
+        let rates = Self.pricingCatalog.rates(for: model)
+        let short = TokenTotals(inputTokens: 100_000, cachedInputTokens: 50_000, outputTokens: 1_000, reasoningOutputTokens: 500, totalTokens: 101_000, cacheWriteInputTokens: 20_000)
+        let long = TokenTotals(inputTokens: 300_000, cachedInputTokens: 200_000, outputTokens: 1_000, reasoningOutputTokens: 500, totalTokens: 301_000, cacheWriteInputTokens: 20_000)
+        #expect(isApproximatelyEqual(CostTotals(totals: short, rates: rates).totalCost, standard))
+        #expect(isApproximatelyEqual(CostTotals(totals: long, rates: rates).totalCost, longContext))
+    }
+
+    @Test func cacheWriteCountsSurviveParsingAndIncrementalAggregation() throws {
+        let first = FixtureTotals(inputTokens: 100_000, cachedInputTokens: 50_000, outputTokens: 1_000, reasoningOutputTokens: 500, totalTokens: 101_000, cacheWriteInputTokens: 20_000)
+        let cumulative = FixtureTotals(inputTokens: 200_000, cachedInputTokens: 100_000, outputTokens: 2_000, reasoningOutputTokens: 1_000, totalTokens: 202_000, cacheWriteInputTokens: 40_000)
+        let path = "2026/09/06/writes.jsonl"
+        let (service, rootURL) = try makeService(logsByPath: [path: buildLog(events: [
+            makeTurnContextEvent(timestamp: "2026-09-06T12:00:00.000Z", model: "gpt-6-astra"),
+            makeTokenCountEvent(timestamp: "2026-09-06T12:00:01.000Z", total: first, last: first)
+        ])])
+        defer { try? FileManager.default.removeItem(at: rootURL) }
+        let today = date(year: 2026, month: 9, day: 6)
+        let initial = try #require(service.fetchDailyUsage(for: today).first?.aggregate)
+        #expect(isApproximatelyEqual(initial.costs.totalCost, 0.65))
+        try appendLog(events: [
+            makeTokenCountEvent(timestamp: "2026-09-06T12:00:02.000Z", total: cumulative, last: nil)
+        ], to: rootURL.appendingPathComponent(path))
+        let updated = try #require(service.fetchDailyUsage(for: today).first?.aggregate)
+        #expect(updated.totals.cacheWriteInputTokens == 40_000)
+        #expect(isApproximatelyEqual(updated.costs.totalCost, 1.3))
+        #expect(try service.fetchMonthlyTotals(for: today) == updated)
+    }
+
+    @Test func cacheWriteDecodingDefaultsAndClampsToUncachedInput() throws {
+        let legacy = Data(#"{"input_tokens":1000,"cache_read_input_tokens":800,"output_tokens":100}"#.utf8)
+        let current = Data(#"{"input_tokens":1000,"cached_input_tokens":800,"cache_write_input_tokens":500,"output_tokens":100}"#.utf8)
+        let decoder = JSONDecoder()
+        #expect(try decoder.decode(TokenTotals.self, from: legacy).cacheWriteInputTokens == 0)
+        let normalized = try decoder.decode(TokenTotals.self, from: current).normalized()
+        #expect(normalized.cacheWriteInputTokens == 200)
+        #expect(normalized.billingTokenTotal == 1_100)
     }
 
     @Test func longContextPricingStartsAbove272KInputTokens() {
@@ -480,8 +555,8 @@ struct TokageTests {
         let standardCost = CostTotals(totals: atThreshold, rates: rates)
         let longContextCost = CostTotals(totals: aboveThreshold, rates: rates)
 
-        #expect(isApproximatelyEqual(standardCost.totalCost, 0.76))
-        #expect(isApproximatelyEqual(longContextCost.totalCost, 1.37001))
+        #expect(isApproximatelyEqual(standardCost.totalCost, 0.568))
+        #expect(isApproximatelyEqual(longContextCost.totalCost, 1.036008))
     }
 
     @Test func reasoningTokensAreIncludedOnceInOutputTotalsAndBreakdown() {
@@ -497,10 +572,10 @@ struct TokageTests {
         let breakdown = TokenUsageFormatter.shared.breakdown(for: aggregate)
 
         #expect(aggregate.billingTokenTotal == 110_000)
-        #expect(isApproximatelyEqual(costs.outputCost, 0.3))
+        #expect(isApproximatelyEqual(costs.outputCost, 0.2))
         #expect(breakdown.map(\.kind) == [.input, .cached, .output])
         #expect(breakdown.last?.tokensText == "10K")
-        #expect(breakdown.last?.costText == "$0.30")
+        #expect(breakdown.last?.costText == "$0.20")
     }
 
     @Test func monthlyTotalsIgnoreForkedSubagentLogs() throws {

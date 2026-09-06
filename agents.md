@@ -23,7 +23,8 @@ This document summarizes the operational choices implemented in the Tokage menuâ
 - Resolve each `turn_context` model through the bundled catalog; unknown models use the generic fallback.  
 - Reasoning is a subset of output, so output tokens and costs are counted once.  
 - Supported GPT-5.4+ models apply 2x input/cached-input and 1.5x output rates when a single usage event exceeds 272,000 input tokens.  
-- Dollar values are API-equivalent estimates. GPT-5.6 cache-write premiums are excluded because JSONL token events do not expose cache-write counts.  
+- Dollar values are standard API-equivalent estimates. Astra and GPT-5.6 cache-write premiums are included when `cache_write_input_tokens` is present (zero for older logs). Cache writes are a subset of uncached input, counted and charged once.
+- Rates in `Tokage/ModelPricing.json` were verified September 6, 2026; GPT-5.6 Sol promotional pricing should be rechecked when it changes (available at least through November 21, 2026).
 
 ## Deduplication
 

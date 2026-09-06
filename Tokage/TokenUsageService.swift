@@ -3,6 +3,7 @@ import Foundation
 struct TokenTotals: Decodable, Equatable, Hashable {
     let inputTokens: Int
     let cachedInputTokens: Int
+    let cacheWriteInputTokens: Int
     let outputTokens: Int
     let reasoningOutputTokens: Int
     let totalTokens: Int
@@ -10,6 +11,7 @@ struct TokenTotals: Decodable, Equatable, Hashable {
     enum CodingKeys: String, CodingKey {
         case inputTokens = "input_tokens"
         case cachedInputTokens = "cached_input_tokens"
+        case cacheWriteInputTokens = "cache_write_input_tokens"
         case outputTokens = "output_tokens"
         case reasoningOutputTokens = "reasoning_output_tokens"
         case totalTokens = "total_tokens"
@@ -24,10 +26,12 @@ struct TokenTotals: Decodable, Equatable, Hashable {
         cachedInputTokens: Int,
         outputTokens: Int,
         reasoningOutputTokens: Int,
-        totalTokens: Int
+        totalTokens: Int,
+        cacheWriteInputTokens: Int = 0
     ) {
         self.inputTokens = inputTokens
         self.cachedInputTokens = cachedInputTokens
+        self.cacheWriteInputTokens = cacheWriteInputTokens
         self.outputTokens = outputTokens
         self.reasoningOutputTokens = reasoningOutputTokens
         self.totalTokens = totalTokens
@@ -43,13 +47,15 @@ struct TokenTotals: Decodable, Equatable, Hashable {
         let output = try container.decodeIfPresent(Int.self, forKey: .outputTokens) ?? 0
         let reasoning = try container.decodeIfPresent(Int.self, forKey: .reasoningOutputTokens) ?? 0
         let total = try container.decodeIfPresent(Int.self, forKey: .totalTokens) ?? 0
+        let writes = try container.decodeIfPresent(Int.self, forKey: .cacheWriteInputTokens) ?? 0
 
         self.init(
             inputTokens: input,
             cachedInputTokens: cached,
             outputTokens: output,
             reasoningOutputTokens: reasoning,
-            totalTokens: total
+            totalTokens: total,
+            cacheWriteInputTokens: writes
         )
     }
 
@@ -73,7 +79,8 @@ struct TokenTotals: Decodable, Equatable, Hashable {
             cachedInputTokens: cachedDelta,
             outputTokens: outputDelta,
             reasoningOutputTokens: reasoningDelta,
-            totalTokens: totalDelta
+            totalTokens: totalDelta,
+            cacheWriteInputTokens: Self.delta(current: cacheWriteInputTokens, previous: previous.cacheWriteInputTokens)
         )
     }
 
@@ -83,7 +90,8 @@ struct TokenTotals: Decodable, Equatable, Hashable {
             cachedInputTokens: cachedInputTokens + other.cachedInputTokens,
             outputTokens: outputTokens + other.outputTokens,
             reasoningOutputTokens: reasoningOutputTokens + other.reasoningOutputTokens,
-            totalTokens: totalTokens + other.totalTokens
+            totalTokens: totalTokens + other.totalTokens,
+            cacheWriteInputTokens: cacheWriteInputTokens + other.cacheWriteInputTokens
         )
     }
 
@@ -118,7 +126,8 @@ struct TokenTotals: Decodable, Equatable, Hashable {
             cachedInputTokens: clampedCached,
             outputTokens: normalizedOutput,
             reasoningOutputTokens: normalizedReasoning,
-            totalTokens: max(normalizedTotal, 0)
+            totalTokens: max(normalizedTotal, 0),
+            cacheWriteInputTokens: min(max(cacheWriteInputTokens, 0), normalizedInput - clampedCached)
         )
     }
 
@@ -140,9 +149,11 @@ struct CostTotals: Equatable, Hashable {
     }
 
     init(totals: TokenTotals, rates: ModelRates) {
+        let totals = totals.normalized()
         let effectiveRates = rates.effectiveRates(forInputTokens: totals.inputTokens)
         self.init(
-            inputCost: CostTotals.cost(tokens: totals.billedInputTokens, rate: effectiveRates.input),
+            inputCost: CostTotals.cost(tokens: totals.billedInputTokens - totals.cacheWriteInputTokens, rate: effectiveRates.input)
+                + CostTotals.cost(tokens: totals.cacheWriteInputTokens, rate: effectiveRates.cacheWriteInput),
             cachedInputCost: CostTotals.cost(tokens: totals.cachedInputTokens, rate: effectiveRates.cachedInput),
             outputCost: CostTotals.cost(tokens: totals.outputTokens, rate: effectiveRates.output)
         )
